@@ -1,7 +1,27 @@
 # 🤖 AI Interview Agent - Hướng dẫn sử dụng
 
 ## Tổng quan
-AI Interview Agent là một công cụ CLI chatbox tương tác để phân tích dữ liệu từ các file .md và mô phỏng phỏng vấn kiến thức về Hugging Face.
+AI Interview Agent là một công cụ CLI chatbox tương tác với **tích hợp AI Ollama llama3:8b** để phân tích dữ liệu từ các file .md và mô phỏng phỏng vấn kiến thức về Hugging Face một cách thông minh và chính xác.
+
+## ✨ Tính năng mới - AI Ollama Integration
+
+### 🤖 AI Mode (Ollama llama3:8b)
+- **Phân tích thông minh**: Sử dụng LLM để hiểu câu hỏi và context
+- **Thinking Process**: Hiển thị quá trình suy luận của AI
+- **Context-aware**: Tổng hợp thông tin từ knowledge base
+- **Confidence Scoring**: Đánh giá độ tin cậy của câu trả lời
+- **Smart Response**: Trả lời chi tiết với ví dụ và giải thích
+
+### 📚 Rule-based Mode (Fallback)
+- **Keyword Search**: Tìm kiếm dựa trên từ khóa
+- **Smart Extraction**: Trích xuất thông tin cơ bản
+- **Always Available**: Hoạt động khi AI không khả dụng
+- **Fast Response**: Phản hồi nhanh chóng
+
+### 🔄 Hybrid System
+- **Auto-fallback**: Tự động chuyển sang rule-based nếu AI lỗi
+- **Toggle Mode**: Chuyển đổi giữa AI và rule-based bằng lệnh `ai`
+- **Smart Context**: Xây dựng context thông minh cho AI
 
 ## Tính năng chính
 
@@ -11,11 +31,12 @@ AI Interview Agent là một công cụ CLI chatbox tương tác để phân tí
 - Theo dõi điểm số và thống kê
 - Đưa ra lời khuyên dựa trên kết quả
 
-### 💬 Chế độ Chat (Trò chuyện)
-- Trò chuyện tương tác với AI
-- Trả lời câu hỏi dựa trên kiến thức đã tải
-- Tìm kiếm thông tin liên quan
-- Hỗ trợ chuyển đổi sang chế độ phỏng vấn
+### 💬 Chế độ Chat (Trò chuyện) - **Enhanced với AI**
+- **AI-powered Chat**: Trò chuyện thông minh với Ollama LLM
+- **Smart Q&A**: Trả lời câu hỏi dựa trên kiến thức đã tải
+- **Context Building**: Tự động xây dựng context từ knowledge base
+- **Thinking Process**: Hiển thị quá trình suy luận của AI
+- **Confidence Scoring**: Đánh giá độ tin cậy câu trả lời
 
 ### 📊 Phân tích dữ liệu
 - Tự động phân tích file .md
@@ -29,6 +50,7 @@ AI Interview Agent là một công cụ CLI chatbox tương tác để phân tí
 - Python 3.11+
 - macOS/Linux/Windows
 - Terminal/Command Prompt
+- **Ollama (Optional - cho AI mode)**
 
 ### 2. Cài đặt thư viện
 ```bash
@@ -44,7 +66,19 @@ venv\Scripts\activate     # Windows
 pip install -r requirements.txt
 ```
 
-### 3. Cấu trúc thư viện
+### 3. Cài đặt Ollama (Optional - cho AI mode)
+```bash
+# macOS
+brew install ollama
+
+# Khởi động Ollama
+ollama serve
+
+# Cài đặt model llama3:8b
+ollama pull llama3:8b
+```
+
+### 4. Cấu trúc thư viện
 ```
 click>=8.0.0           # CLI framework
 colorama>=0.4.6        # Terminal colors
@@ -76,8 +110,12 @@ python main.py [FILES...] [OPTIONS]
 python main.py getting-started/questions.md --mode interview
 ```
 
-#### 2. Chế độ chat
+#### 2. Chế độ chat (với AI)
 ```bash
+# Khởi động Ollama trước (nếu muốn dùng AI)
+ollama serve
+
+# Chạy chat mode
 python main.py getting-started/questions.md getting-started/introduction.md --mode chat
 ```
 
@@ -99,6 +137,75 @@ python main.py questions.md --mode interview --shuffle
 #### 6. Chế độ verbose
 ```bash
 python main.py *.md --mode both --verbose
+```
+
+## 🤖 Sử dụng AI Mode
+
+### Bước 1: Khởi động Ollama
+```bash
+# Terminal 1: Khởi động Ollama server
+ollama serve
+
+# Terminal 2: Cài đặt model (chỉ cần 1 lần)
+ollama pull llama3:8b
+```
+
+### Bước 2: Chạy Chat Mode
+```bash
+python main.py getting-started/introduction.md --mode chat
+```
+
+### Bước 3: Sử dụng AI trong Chat
+```
+💬 Chế độ Chat tương tác (🤖 AI Ollama)
+Bạn: Hugging Face là gì?
+
+🤖 AI Assistant
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│ 🤖 AI Ollama Response (Confidence: 85.0%)                                      │
+│                                                                                 │
+│ 💭 Thinking Process:                                                           │
+│ Analyzing the question about Hugging Face, I need to extract key information   │
+│ from the knowledge base about this platform...                                 │
+│                                                                                 │
+│ 📝 Answer:                                                                     │
+│ Hugging Face là một nền tảng cộng tác cho cộng đồng AI/ML với các tính năng:  │
+│ • Model Repository: Lưu trữ hàng ngàn pre-trained models                       │
+│ • Datasets: Bộ sưu tập dữ liệu training                                       │
+│ • Spaces: Demo ứng dụng AI tương tác                                           │
+│ • Transformers Library: Thư viện Python dễ sử dụng                            │
+│                                                                                 │
+│ 🔍 Source: AI Analysis + Knowledge Base                                        │
+│ 📊 Knowledge Used: 1 documents                                                 │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Bước 4: Chuyển đổi chế độ
+```
+Bạn: ai
+System: Chuyển sang chế độ: 📚 Rule-based
+
+Bạn: ai  
+System: Chuyển sang chế độ: 🤖 AI Ollama
+```
+
+### Các lệnh trong Chat Mode
+- `ai` - Chuyển đổi giữa AI và Rule-based
+- `interview` - Chuyển sang chế độ phỏng vấn
+- `quit` - Thoát chương trình
+
+## 🔧 Demo và Test
+
+### Demo tích hợp AI
+```bash
+python demo_ai_integration.py
+```
+
+### Test không cần Ollama
+```bash
+# Chạy rule-based mode
+python main.py getting-started/introduction.md --mode chat
+# Hệ thống sẽ tự động fallback sang rule-based
 ```
 
 ## Định dạng file input

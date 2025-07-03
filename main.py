@@ -16,6 +16,7 @@ from bs4 import BeautifulSoup
 import click
 import colorama
 import markdown
+import requests
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
@@ -189,6 +190,170 @@ class MarkdownParser:
         except Exception as e:
             console.print(f'[red]Lỗi khi đọc file {file_path}: {e}[/red]')
             return None  # type: ignore
+
+
+@dataclass
+class AIResponse:
+    """Cấu trúc phản hồi từ AI"""
+
+    content: str
+    source: str = 'ai'
+    confidence: float = 0.0
+    thinking_process: str = ''
+    knowledge_used: Optional[List[str]] = None
+
+    def __post_init__(self):
+        if self.knowledge_used is None:
+            self.knowledge_used = []
+
+
+class OllamaAI:
+    """Tích hợp AI Ollama llama3:8b"""
+
+    def __init__(
+        self, model_name: str = 'llama3:8b', base_url: str = 'http://localhost:11434'
+    ):
+        self.model_name = model_name
+        self.base_url = base_url
+        self.is_available = False
+        self.session = requests.Session()
+        self._check_availability()
+
+    def _check_availability(self):
+        """Kiểm tra Ollama có khả dụng không"""
+        try:
+            response = self.session.get(f'{self.base_url}/api/tags', timeout=5)
+            if response.status_code == 200:
+                models = response.json().get('models', [])
+                available_models = [m['name'] for m in models]
+                if self.model_name in available_models:
+                    self.is_available = True
+                    console.print(f'[green]✓ Ollama {self.model_name} khả dụng[/green]')
+                else:
+                    console.print(
+                        f'[yellow]⚠ Model {self.model_name} chưa được cài đặt[/yellow]'
+                    )
+                    console.print(
+                        f'[dim]Có thể cài đặt: ollama pull {self.model_name}[/dim]'
+                    )
+            else:
+                console.print('[yellow]⚠ Ollama server không phản hồi[/yellow]')
+        except requests.RequestException:
+            console.print(
+                '[yellow]⚠ Không thể kết nối tới Ollama (http://localhost:11434)[/yellow]'
+            )
+            console.print('[dim]Hãy chắc chắn Ollama đã chạy: ollama serve[/dim]')
+
+    def generate_response(
+        self, prompt: str, context: str = '', max_tokens: int = 500
+    ) -> AIResponse:
+        """Tạo phản hồi từ AI"""
+        if not self.is_available:
+            return AIResponse(
+                content='❌ AI Ollama không khả dụng. Sử dụng chế độ rule-based.',
+                source='fallback',
+                confidence=0.0,
+            )
+
+        try:
+            # Tạo prompt template
+            system_prompt = self._create_system_prompt(context)
+            full_prompt = f'{system_prompt}\n\nQuestion: {prompt}\n\nAnswer:'
+
+            # Gọi API Ollama
+            payload = {
+                'model': self.model_name,
+                'prompt': full_prompt,
+                'stream': False,
+                'options': {
+                    'temperature': 0.7,
+                    'top_k': 40,
+                    'top_p': 0.9,
+                    'num_predict': max_tokens,
+                },
+            }
+
+            response = self.session.post(
+                f'{self.base_url}/api/generate', json=payload, timeout=30
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                ai_response = result.get('response', '').strip()
+
+                # Parse response để extract thinking process
+                thinking_process = ''
+                knowledge_used = []
+
+                if '<thinking>' in ai_response:
+                    thinking_match = re.search(
+                        r'<thinking>(.*?)</thinking>', ai_response, re.DOTALL
+                    )
+                    if thinking_match:
+                        thinking_process = thinking_match.group(1).strip()
+                        ai_response = re.sub(
+                            r'<thinking>.*?</thinking>',
+                            '',
+                            ai_response,
+                            flags=re.DOTALL,
+                        ).strip()
+
+                # Tính confidence dựa trên độ dài và chất lượng response
+                confidence = min(0.9, len(ai_response) / 300)
+
+                return AIResponse(
+                    content=ai_response,
+                    source='ollama',
+                    confidence=confidence,
+                    thinking_process=thinking_process,
+                    knowledge_used=knowledge_used,
+                )
+            else:
+                console.print(f'[red]Lỗi API Ollama: {response.status_code}[/red]')
+                return AIResponse(
+                    content='❌ Lỗi khi gọi API Ollama', source='error', confidence=0.0
+                )
+
+        except requests.RequestException as e:
+            console.print(f'[red]Lỗi kết nối Ollama: {e}[/red]')
+            return AIResponse(
+                content='❌ Không thể kết nối tới Ollama',
+                source='error',
+                confidence=0.0,
+            )
+
+    def _create_system_prompt(self, context: str) -> str:
+        """Tạo system prompt cho AI"""
+        return f"""Bạn là AI Assistant chuyên về Hugging Face và Machine Learning.
+
+Context từ Knowledge Base:
+{context}
+
+QUAN TRỌNG - Quy tắc trả lời:
+1. Trả lời bằng tiếng Việt, ngắn gọn và chính xác
+2. KHÔNG sử dụng markdown formatting (**, *, `, #, etc.)
+3. Sử dụng emoji phù hợp để làm cho câu trả lời sinh động
+4. Cung cấp thông tin thực tế dựa trên context
+5. Nếu cần suy luận, bao quanh trong <thinking></thinking>
+6. Trả lời trực tiếp, tránh từ ngữ thừa
+
+Format trả lời mong muốn:
+- Câu trả lời trực tiếp với emoji
+- Danh sách dùng dấu • thay vì số
+- Ví dụ cụ thể khi có thể
+- Tối đa 3-4 ý chính
+
+Ví dụ tốt:
+🤖 Hugging Face là nền tảng AI mở với các tính năng:
+• Model Hub: Lưu trữ hàng ngàn models
+• Datasets: Bộ sưu tập dữ liệu training
+• Spaces: Demo ứng dụng AI
+• Transformers: Thư viện Python dễ sử dụng
+
+Ví dụ tránh:
+**Hugging Face** là một *platform* quan trọng...
+
+Hãy trả lời ngắn gọn, dễ hiểu và thực tế."""
 
 
 class InterviewAgent:
@@ -479,19 +644,23 @@ class InterviewAgent:
 
 
 class ChatMode:
-    """Chế độ chat tương tác"""
+    """Chế độ chat tương tác với AI Ollama"""
 
     def __init__(self, agent: InterviewAgent):
         self.agent = agent
         self.conversation_history = []
+        self.ollama_ai = OllamaAI()
+        self.use_ai = self.ollama_ai.is_available
 
     def start_chat(self):
         """Bắt đầu chế độ chat"""
+        ai_status = '🤖 AI Ollama' if self.use_ai else '📚 Rule-based'
         console.print(
             Panel.fit(
-                '[bold green]💬 Chế độ Chat tương tác[/bold green]\n'
+                f'[bold green]💬 Chế độ Chat tương tác ({ai_status})[/bold green]\n'
                 'Hỏi tôi bất cứ điều gì về Hugging Face!\n'
-                "Gõ 'quit' để thoát, 'interview' để chuyển sang chế độ phỏng vấn",
+                "Gõ 'quit' để thoát, 'interview' để chuyển sang chế độ phỏng vấn\n"
+                f"Gõ 'ai' để {'tắt' if self.use_ai else 'bật'} AI mode",
                 title='AI Chat Assistant',
                 border_style='green',
             )
@@ -510,14 +679,216 @@ class ChatMode:
                     self.agent.start_interview()
                     continue
 
+                if user_input.lower() == 'ai':
+                    self.use_ai = not self.use_ai
+                    status = '🤖 AI Ollama' if self.use_ai else '📚 Rule-based'
+                    console.print(f'[yellow]Chuyển sang chế độ: {status}[/yellow]')
+                    continue
+
                 # Xử lý câu hỏi
-                response = self.process_question(user_input)
+                if self.use_ai:
+                    response = self.process_question_with_ai(user_input)
+                else:
+                    response = self.process_question_rule_based(user_input)
+
                 console.print('\n[bold green]🤖 AI Assistant[/bold green]')
                 console.print(Panel(response, border_style='green'))
 
             except KeyboardInterrupt:
                 console.print('\n[green]Tạm biệt! 👋[/green]')
                 break
+
+    def _build_context(self, question: str) -> str:
+        """Xây dựng context từ knowledge base cho AI"""
+        question_lower = question.lower()
+        relevant_knowledge = []
+
+        # Tìm kiến thức liên quan
+        for knowledge in self.agent.knowledge_base:
+            relevance_score = 0
+
+            # Kiểm tra keywords
+            for keyword in knowledge.keywords:
+                if keyword in question_lower:
+                    relevance_score += 2
+
+            # Kiểm tra content
+            content_lower = knowledge.content.lower()
+            for word in question_lower.split():
+                if word in content_lower:
+                    relevance_score += 1
+
+            if relevance_score > 0:
+                relevant_knowledge.append((relevance_score, knowledge))
+
+        # Sắp xếp theo relevance score
+        relevant_knowledge.sort(key=lambda x: x[0], reverse=True)
+
+        # Tạo context
+        context = ''
+        for score, knowledge in relevant_knowledge[:3]:  # Lấy top 3
+            context += f'## {knowledge.title}\n'
+            context += f'Source: {Path(knowledge.source_file).name}\n'
+            context += f'Content: {knowledge.content[:800]}...\n\n'
+
+        return (
+            context if context else 'Không có thông tin liên quan trong knowledge base.'
+        )
+
+    def process_question_with_ai(self, question: str) -> str:
+        """Xử lý câu hỏi với AI Ollama"""
+        try:
+            # Tạo context từ knowledge base
+            context = self._build_context(question)
+
+            # Gọi AI
+            with console.status('[bold green]🤖 AI đang suy nghĩ...', spinner='dots'):
+                ai_response = self.ollama_ai.generate_response(question, context)
+
+            # Format response với template đẹp
+            return self._format_ai_response(ai_response, question)
+
+        except Exception as e:
+            console.print(f'[red]Lỗi AI: {e}[/red]')
+            return self.process_question_rule_based(question)
+
+    def _format_ai_response(self, ai_response: AIResponse, question: str) -> str:
+        """Format AI response với template đẹp và clean"""
+        lines = []
+        
+        # Header với confidence
+        confidence_emoji = self._get_confidence_emoji(ai_response.confidence)
+        lines.append(f"🤖 AI Analysis {confidence_emoji} ({ai_response.confidence:.0%} confidence)")
+        lines.append("")
+        
+        # Main content - làm sạch và format
+        clean_content = self._clean_ai_content(ai_response.content)
+        if clean_content:
+            lines.append("📋 Answer:")
+            lines.append("─" * 50)
+            lines.extend(self._format_content_lines(clean_content))
+            lines.append("")
+        
+        # Thinking process (nếu có) - compact format
+        if ai_response.thinking_process:
+            thinking_clean = self._clean_ai_content(ai_response.thinking_process)
+            if thinking_clean and len(thinking_clean) > 20:  # Chỉ hiện nếu có nội dung
+                lines.append("💭 AI Reasoning:")
+                lines.append("─" * 30)
+                # Rút gọn thinking process
+                thinking_summary = self._summarize_thinking(thinking_clean)
+                lines.append(f"   {thinking_summary}")
+                lines.append("")
+        
+        # Footer với source info
+        if ai_response.source == "ollama":
+            lines.append("🔍 Analysis based on:")
+            lines.append(f"   • Knowledge Base: {len(self.agent.knowledge_base)} documents")
+            lines.append("   • AI Model: Ollama Llama3")
+        
+        return "\n".join(lines)
+    
+    def _get_confidence_emoji(self, confidence: float) -> str:
+        """Lấy emoji phù hợp với confidence level"""
+        if confidence >= 0.8:
+            return "🎯"  # High confidence
+        elif confidence >= 0.6:
+            return "✅"  # Good confidence
+        elif confidence >= 0.4:
+            return "⚠️"   # Medium confidence
+        else:
+            return "❓"  # Low confidence
+    
+    def _clean_ai_content(self, content: str) -> str:
+        """Làm sạch content AI, loại bỏ markdown và formatting không cần thiết"""
+        if not content:
+            return ""
+        
+        # Loại bỏ markdown formatting
+        content = re.sub(r'\*\*(.*?)\*\*', r'\1', content)  # **bold** -> bold
+        content = re.sub(r'\*(.*?)\*', r'\1', content)      # *italic* -> italic
+        content = re.sub(r'`(.*?)`', r'\1', content)        # `code` -> code
+        content = re.sub(r'#{1,6}\s*', '', content)         # headings
+        content = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', content)  # links
+        
+        # Làm sạch các ký tự đặc biệt - CẨN THẬN KHÔNG LẶP
+        # Chỉ chuẩn hóa các dấu bullet ở đầu dòng
+        content = re.sub(r'^[\s]*[-\*]\s+', '• ', content, flags=re.MULTILINE)
+        content = re.sub(r'\n\s*\n\s*\n', '\n\n', content) # Loại bỏ line breaks thừa
+        
+        # Loại bỏ các thẻ thinking
+        content = re.sub(r'<thinking>.*?</thinking>', '', content, flags=re.DOTALL)
+        
+        return content.strip()
+    
+    def _format_content_lines(self, content: str) -> List[str]:
+        """Format content thành các dòng đẹp với indentation"""
+        lines = content.split('\n')
+        formatted = []
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            
+            # Bullet points
+            if line.startswith('•'):
+                formatted.append(f"   {line}")
+            # Numbered lists
+            elif re.match(r'^\d+\.', line):
+                formatted.append(f"   {line}")
+            # Headers or important lines
+            elif line.isupper() or line.endswith(':'):
+                formatted.append(f"\n   {line}")
+            # Regular content
+            else:
+                # Wrap long lines
+                if len(line) > 80:
+                    wrapped = self._wrap_text(line, 80)
+                    for wrapped_line in wrapped:
+                        formatted.append(f"   {wrapped_line}")
+                else:
+                    formatted.append(f"   {line}")
+        
+        return formatted
+    
+    def _wrap_text(self, text: str, width: int) -> List[str]:
+        """Wrap text để không quá dài"""
+        words = text.split()
+        lines = []
+        current_line = []
+        current_length = 0
+        
+        for word in words:
+            if current_length + len(word) + 1 <= width:
+                current_line.append(word)
+                current_length += len(word) + 1
+            else:
+                if current_line:
+                    lines.append(' '.join(current_line))
+                current_line = [word]
+                current_length = len(word)
+        
+        if current_line:
+            lines.append(' '.join(current_line))
+        
+        return lines
+    
+    def _summarize_thinking(self, thinking: str) -> str:
+        """Tóm tắt thinking process để hiển thị gọn"""
+        # Lấy câu đầu tiên hoặc 100 ký tự đầu
+        sentences = thinking.split('.')
+        if sentences and len(sentences[0]) > 20:
+            summary = sentences[0].strip()
+            if len(summary) > 100:
+                summary = summary[:100] + "..."
+            return summary
+        else:
+            return thinking[:100] + "..." if len(thinking) > 100 else thinking
+
+    def process_question_rule_based(self, question: str) -> str:
+        """Xử lý câu hỏi theo rule-based (phương pháp cũ)"""
+        return self.process_question(question)
 
     def process_question(self, question: str) -> str:
         """Xử lý câu hỏi và trả lời dựa trên knowledge base"""
@@ -540,63 +911,134 @@ class ChatMode:
                     relevant_knowledge.append(knowledge)
 
         if relevant_knowledge:
-            # Tạo phản hồi dựa trên kiến thức
-            response = '📚 Dựa trên tài liệu đã tải, tôi có thể trả lời:\n\n'
-
-            for knowledge in relevant_knowledge[:2]:  # Chỉ lấy 2 tài liệu đầu
-                response += f'💡 {self._clean_markdown(knowledge.title)}\n'
-                response += '─' * 50 + '\n'
-                
-                # Sử dụng smart search để tìm nội dung liên quan
-                smart_results = self._smart_search(question, knowledge)
-                
-                if smart_results:
-                    # Hiển thị kết quả tìm kiếm thông minh
-                    for result in smart_results:
-                        cleaned_result = self._clean_markdown(result)
-                        if cleaned_result:
-                            response += f'{cleaned_result}\n'
-                else:
-                    # Fallback: extract key points
-                    key_points = self._extract_key_points(knowledge.content)
-                    if key_points:
-                        for point in key_points:
-                            response += f'{point}\n'
-                    else:
-                        # Final fallback: clean content
-                        cleaned_content = self._clean_markdown(knowledge.content[:400])
-                        response += self._format_content(cleaned_content)
-
-                response += f'\n\n� Nguồn: {Path(knowledge.source_file).name}\n\n'
+            return self._format_rule_based_response(relevant_knowledge, question)
         else:
-            response = '❌ Xin lỗi, tôi không tìm thấy thông tin liên quan trong tài liệu đã tải.\n\n'
-            response += '💡 Hãy thử:\n'
-            response += "• Chuyển sang chế độ phỏng vấn: gõ 'interview'\n"
-            response += '• Hỏi về các chủ đề như: Hugging Face, LLM, Model, Hub, API\n'
-            response += f'• Tôi có {len(self.agent.knowledge_base)} tài liệu và {len(self.agent.questions)} câu hỏi'
-
-        return response
+            return self._format_no_results_response()
+    
+    def _format_rule_based_response(self, relevant_knowledge: List[Knowledge], question: str) -> str:
+        """Format rule-based response với template đẹp"""
+        lines = []
+        
+        # Header
+        lines.append("📚 Knowledge Base Search ✅")
+        lines.append("")
+        
+        # Main content
+        lines.append("📋 Found Information:")
+        lines.append("─" * 50)
+        
+        for i, knowledge in enumerate(relevant_knowledge[:2], 1):  # Chỉ lấy 2 tài liệu đầu
+            lines.append(f"\n� Source {i}: {self._clean_markdown(knowledge.title)}")
+            lines.append("─" * 30)
+            
+            # Sử dụng smart search để tìm nội dung liên quan
+            smart_results = self._smart_search(question, knowledge)
+            
+            if smart_results:
+                # Hiển thị kết quả tìm kiếm thông minh
+                for result in smart_results[:3]:  # Giới hạn 3 kết quả
+                    cleaned_result = self._clean_markdown(result)
+                    if cleaned_result and len(cleaned_result) > 10:
+                        # Format với indentation - loại bỏ bullet có sẵn
+                        formatted_result = self._format_single_result(cleaned_result)
+                        # Loại bỏ bullet ở đầu nếu có
+                        if formatted_result.startswith('• '):
+                            formatted_result = formatted_result[2:]
+                        lines.append(f"   • {formatted_result}")
+            else:
+                # Fallback: extract key points
+                key_points = self._extract_key_points(knowledge.content)
+                if key_points:
+                    for point in key_points[:3]:  # Giới hạn 3 điểm
+                        lines.append(f"   • {point}")
+                else:
+                    # Final fallback: clean content summary
+                    summary = self._create_summary(knowledge.content)
+                    lines.append(f"   {summary}")
+            
+            lines.append(f"\n   📁 From: {Path(knowledge.source_file).name}")
+        
+        # Footer
+        lines.append("")
+        lines.append("🔍 Search based on:")
+        lines.append(f"   • Keyword matching and content analysis")
+        lines.append(f"   • Knowledge Base: {len(self.agent.knowledge_base)} documents")
+        
+        return "\n".join(lines)
+    
+    def _format_no_results_response(self) -> str:
+        """Format response khi không tìm thấy kết quả"""
+        lines = []
+        
+        lines.append("📚 Knowledge Base Search ❌")
+        lines.append("")
+        lines.append("📋 No Direct Match Found")
+        lines.append("─" * 50)
+        lines.append("")
+        lines.append("💡 Suggestions:")
+        lines.append("   • Try asking about: Hugging Face, Models, Hub, API")
+        lines.append("   • Switch to interview mode: type 'interview'")
+        lines.append("   • Toggle AI mode: type 'ai'")
+        lines.append("")
+        lines.append("🔍 Available Resources:")
+        lines.append(f"   • Knowledge Base: {len(self.agent.knowledge_base)} documents")
+        lines.append(f"   • Question Bank: {len(self.agent.questions)} questions")
+        
+        return "\n".join(lines)
+    
+    def _format_single_result(self, result: str) -> str:
+        """Format một kết quả tìm kiếm"""
+        # Loại bỏ ký tự thừa và format đẹp
+        result = result.strip()
+        
+        # Nếu quá dài, cắt ngắn
+        if len(result) > 120:
+            result = result[:120] + "..."
+        
+        return result
+    
+    def _create_summary(self, content: str) -> str:
+        """Tạo summary ngắn gọn từ content"""
+        # Lấy câu đầu tiên hoặc đoạn đầu
+        sentences = content.split('.')
+        if sentences and len(sentences[0].strip()) > 20:
+            summary = sentences[0].strip()
+            if len(summary) > 150:
+                summary = summary[:150] + "..."
+            return summary
+        else:
+            # Fallback: lấy đoạn đầu
+            paragraphs = content.split('\n\n')
+            if paragraphs:
+                first_para = paragraphs[0].strip()
+                if len(first_para) > 200:
+                    first_para = first_para[:200] + "..."
+                return self._clean_markdown(first_para)
+        
+        return "Content available but requires specific keywords to search."
 
     def _clean_markdown(self, text: str) -> str:
         """Loại bỏ các ký tự markdown formatting"""
         if not text:
             return ''
-        
+
         # Loại bỏ markdown formatting
         text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)  # **bold** -> bold
-        text = re.sub(r'\*(.*?)\*', r'\1', text)      # *italic* -> italic
-        text = re.sub(r'`(.*?)`', r'\1', text)        # `code` -> code
-        text = re.sub(r'#{1,6}\s*', '', text)         # ## heading -> heading
+        text = re.sub(r'\*(.*?)\*', r'\1', text)  # *italic* -> italic
+        text = re.sub(r'`(.*?)`', r'\1', text)  # `code` -> code
+        text = re.sub(r'#{1,6}\s*', '', text)  # ## heading -> heading
         text = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', text)  # [text](url) -> text
-        text = re.sub(r'^\s*[-*+]\s*', '• ', text, flags=re.MULTILINE)  # - item -> • item
-        
+        text = re.sub(
+            r'^\s*[-*+]\s*', '• ', text, flags=re.MULTILINE
+        )  # - item -> • item
+
         return text.strip()
 
     def _format_content(self, content: str) -> str:
         """Format nội dung để hiển thị đẹp hơn"""
         lines = content.split('\n')
         formatted_lines = []
-        
+
         for line in lines:
             line = line.strip()
             if line:
@@ -604,7 +1046,7 @@ class ChatMode:
                     formatted_lines.append(line)
                 else:
                     formatted_lines.append(f'{line}')
-        
+
         return '\n'.join(formatted_lines[:4])  # Giới hạn 4 dòng
 
     def _smart_search(self, question: str, knowledge: Knowledge) -> List[str]:
@@ -612,49 +1054,52 @@ class ChatMode:
         question_words = set(question.lower().split())
         lines = knowledge.content.split('\n')
         scored_lines = []
-        
+
         for line in lines:
             line = line.strip()
             if not line or line.startswith('#'):
                 continue
-                
+
             # Tính điểm relevance
             line_words = set(line.lower().split())
             score = len(question_words.intersection(line_words))
-            
+
             # Bonus điểm cho dòng chứa từ khóa quan trọng
-            if any(keyword in line.lower() for keyword in ['hugging face', 'model', 'api', 'hub']):
+            if any(
+                keyword in line.lower()
+                for keyword in ['hugging face', 'model', 'api', 'hub']
+            ):
                 score += 2
-                
+
             if score > 0:
                 scored_lines.append((score, line))
-        
+
         # Sort theo điểm và lấy top results
         scored_lines.sort(key=lambda x: x[0], reverse=True)
         return [line for score, line in scored_lines[:5]]
-    
+
     def _extract_key_points(self, content: str) -> List[str]:
         """Trích xuất các điểm chính từ nội dung"""
         lines = content.split('\n')
         key_points = []
-        
+
         for line in lines:
             line = line.strip()
             if not line:
                 continue
-                
+
             # Tìm các bullet points
             if line.startswith(('- ', '• ', '* ')):
                 cleaned = self._clean_markdown(line[2:].strip())
                 if cleaned:
                     key_points.append(cleaned)
-            
+
             # Tìm các heading quan trọng
             elif line.startswith('###'):
                 cleaned = self._clean_markdown(line[3:].strip())
                 if cleaned:
-                    key_points.append(f"📌 {cleaned}")
-        
+                    key_points.append(f'📌 {cleaned}')
+
         return key_points[:6]  # Giới hạn 6 điểm chính
 
 
