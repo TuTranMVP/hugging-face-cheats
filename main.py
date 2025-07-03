@@ -541,30 +541,121 @@ class ChatMode:
 
         if relevant_knowledge:
             # Tạo phản hồi dựa trên kiến thức
-            response = 'Dựa trên tài liệu đã tải, tôi có thể trả lời:\n\n'
+            response = '📚 Dựa trên tài liệu đã tải, tôi có thể trả lời:\n\n'
 
             for knowledge in relevant_knowledge[:2]:  # Chỉ lấy 2 tài liệu đầu
-                response += f'**{knowledge.title}**\n'
-                # Trích xuất đoạn văn liên quan
-                lines = knowledge.content.split('\n')
-                relevant_lines = []
-                for line in lines:
-                    if any(word in line.lower() for word in question_lower.split()):
-                        relevant_lines.append(line.strip())
-
-                if relevant_lines:
-                    response += '\n'.join(relevant_lines[:3])  # Chỉ lấy 3 dòng đầu
+                response += f'💡 {self._clean_markdown(knowledge.title)}\n'
+                response += '─' * 50 + '\n'
+                
+                # Sử dụng smart search để tìm nội dung liên quan
+                smart_results = self._smart_search(question, knowledge)
+                
+                if smart_results:
+                    # Hiển thị kết quả tìm kiếm thông minh
+                    for result in smart_results:
+                        cleaned_result = self._clean_markdown(result)
+                        if cleaned_result:
+                            response += f'{cleaned_result}\n'
                 else:
-                    response += knowledge.content[:300] + '...'  # Lấy 300 ký tự đầu
+                    # Fallback: extract key points
+                    key_points = self._extract_key_points(knowledge.content)
+                    if key_points:
+                        for point in key_points:
+                            response += f'{point}\n'
+                    else:
+                        # Final fallback: clean content
+                        cleaned_content = self._clean_markdown(knowledge.content[:400])
+                        response += self._format_content(cleaned_content)
 
-                response += f'\n\n*(Nguồn: {Path(knowledge.source_file).name})*\n\n'
+                response += f'\n\n� Nguồn: {Path(knowledge.source_file).name}\n\n'
         else:
-            response = 'Xin lỗi, tôi không tìm thấy thông tin liên quan trong tài liệu đã tải. Hãy thử:\n\n'
+            response = '❌ Xin lỗi, tôi không tìm thấy thông tin liên quan trong tài liệu đã tải.\n\n'
+            response += '💡 Hãy thử:\n'
             response += "• Chuyển sang chế độ phỏng vấn: gõ 'interview'\n"
             response += '• Hỏi về các chủ đề như: Hugging Face, LLM, Model, Hub, API\n'
             response += f'• Tôi có {len(self.agent.knowledge_base)} tài liệu và {len(self.agent.questions)} câu hỏi'
 
         return response
+
+    def _clean_markdown(self, text: str) -> str:
+        """Loại bỏ các ký tự markdown formatting"""
+        if not text:
+            return ''
+        
+        # Loại bỏ markdown formatting
+        text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)  # **bold** -> bold
+        text = re.sub(r'\*(.*?)\*', r'\1', text)      # *italic* -> italic
+        text = re.sub(r'`(.*?)`', r'\1', text)        # `code` -> code
+        text = re.sub(r'#{1,6}\s*', '', text)         # ## heading -> heading
+        text = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', text)  # [text](url) -> text
+        text = re.sub(r'^\s*[-*+]\s*', '• ', text, flags=re.MULTILINE)  # - item -> • item
+        
+        return text.strip()
+
+    def _format_content(self, content: str) -> str:
+        """Format nội dung để hiển thị đẹp hơn"""
+        lines = content.split('\n')
+        formatted_lines = []
+        
+        for line in lines:
+            line = line.strip()
+            if line:
+                if line.startswith('•'):
+                    formatted_lines.append(line)
+                else:
+                    formatted_lines.append(f'{line}')
+        
+        return '\n'.join(formatted_lines[:4])  # Giới hạn 4 dòng
+
+    def _smart_search(self, question: str, knowledge: Knowledge) -> List[str]:
+        """Tìm kiếm thông minh trong knowledge base"""
+        question_words = set(question.lower().split())
+        lines = knowledge.content.split('\n')
+        scored_lines = []
+        
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+                
+            # Tính điểm relevance
+            line_words = set(line.lower().split())
+            score = len(question_words.intersection(line_words))
+            
+            # Bonus điểm cho dòng chứa từ khóa quan trọng
+            if any(keyword in line.lower() for keyword in ['hugging face', 'model', 'api', 'hub']):
+                score += 2
+                
+            if score > 0:
+                scored_lines.append((score, line))
+        
+        # Sort theo điểm và lấy top results
+        scored_lines.sort(key=lambda x: x[0], reverse=True)
+        return [line for score, line in scored_lines[:5]]
+    
+    def _extract_key_points(self, content: str) -> List[str]:
+        """Trích xuất các điểm chính từ nội dung"""
+        lines = content.split('\n')
+        key_points = []
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+                
+            # Tìm các bullet points
+            if line.startswith(('- ', '• ', '* ')):
+                cleaned = self._clean_markdown(line[2:].strip())
+                if cleaned:
+                    key_points.append(cleaned)
+            
+            # Tìm các heading quan trọng
+            elif line.startswith('###'):
+                cleaned = self._clean_markdown(line[3:].strip())
+                if cleaned:
+                    key_points.append(f"📌 {cleaned}")
+        
+        return key_points[:6]  # Giới hạn 6 điểm chính
 
 
 @click.command()
