@@ -43,5 +43,11 @@ modelId = 'distilbert-base-uncased-finetuned-sst-2-english'
 
 my_pipeline = pipeline('text-classification', model=modelId)
 
-# Save the model locally
+# Lưu mô hình locally
 my_pipeline.save_pretrained(f'models/{modelId}')
+
+# Tải lại pipeline đã lưu
+reloaded_pipeline = pipeline('text-classification', model=f'models/{modelId}')
+
+# Kiểm tra pipeline đã được tải lại
+print(reloaded_pipeline('Hugging Face is great!'))
