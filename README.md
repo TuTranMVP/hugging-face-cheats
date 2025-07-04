@@ -404,4 +404,4 @@ python main.py --help
 
 **Phiên bản:** 1.0.0  
 **Ngày cập nhật:** 3 tháng 7, 2025  
-**Tác giả:** AI Interview Agent Team
+**Tác giả:** AI Interview TuTran Studio
