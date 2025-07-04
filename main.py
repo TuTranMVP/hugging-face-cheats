@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
 AI Interview Agent - Hugging Face Knowledge Assessment
-CLI Chatbox với Google Gemini AI - Đã loại bỏ hoàn toàn rule-based system
-Tích hợp workspace knowledge với latest Gemini data để tạo AI interview agent chuyên nghiệp
+CLI Chatbox để phân tích dữ liệu từ file .md và mô phỏng phỏng vấn với Gemini AI
 """
 
 from dataclasses import dataclass
@@ -19,7 +18,6 @@ import click
 import colorama
 from dotenv import load_dotenv
 import google.generativeai as genai
-from google.generativeai import GenerativeModel, configure  # type: ignore
 import markdown
 from rich.console import Console
 from rich.panel import Panel
@@ -633,7 +631,7 @@ class AIResponse:
 
 
 class GeminiAI:
-    """Tích hợp AI Gemini 3.0 Flash - Thay thế hoàn toàn rule-based"""
+    """Tích hợp AI Gemini 2.0 Flash - Thay thế hoàn toàn rule-based"""
 
     def __init__(
         self,
@@ -642,7 +640,7 @@ class GeminiAI:
         temperature: float = 0.7,
         max_tokens: int = 2048,
     ):
-        self.model_name = model_name or os.getenv('GEMINI_MODEL', 'gemini-1.5-flash')
+        self.model_name = model_name or os.getenv('GEMINI_MODEL', 'gemini-2.0-flash')
         self.api_key = api_key or os.getenv('GEMINI_API_KEY')
         self.temperature = temperature
         self.max_tokens = max_tokens
@@ -658,17 +656,17 @@ class GeminiAI:
                 '[dim]Hãy thêm GEMINI_API_KEY=your_key_here vào file .env[/dim]'
             )
             return
+
         try:
-            configure(api_key=self.api_key)
             genai.configure(api_key=self.api_key)  # type: ignore
 
             # Test API connection
-            self.model = GenerativeModel(self.model_name)
+            self.model = genai.GenerativeModel(self.model_name)  # type: ignore
 
             # Test with a simple query
             test_response = self.model.generate_content(
                 'Test connection',
-                generation_config=genai.GenerationConfig(  # type: ignore
+                generation_config=genai.types.GenerationConfig(  # type: ignore
                     temperature=0.1, max_output_tokens=10
                 ),
             )
@@ -684,10 +682,13 @@ class GeminiAI:
             console.print('[dim]Kiểm tra API key và kết nối internet[/dim]')
 
     def generate_response(
-        self, prompt: str, context: str = '', max_tokens: Optional[int] = None
+        self,
+        prompt: str,
+        context: str = '',
+        max_tokens: int = None,  # type: ignore
     ) -> AIResponse:
         """Tạo phản hồi từ Gemini AI với advanced knowledge fusion"""
-        if not self.is_available or self.model is None:
+        if not self.is_available:
             return AIResponse(
                 content='❌ Gemini AI không khả dụng. Vui lòng kiểm tra API key.',
                 source='error',
@@ -699,7 +700,7 @@ class GeminiAI:
             system_prompt = self._create_advanced_system_prompt(context, prompt)
 
             # Configure generation parameters
-            generation_config = genai.GenerationConfig(  # type: ignore
+            generation_config = genai.types.GenerationConfig(  # type: ignore
                 temperature=self.temperature,
                 max_output_tokens=max_tokens or self.max_tokens,
                 top_p=0.9,
@@ -726,7 +727,7 @@ class GeminiAI:
                 },
             ]
 
-            response = self.model.generate_content(
+            response = self.model.generate_content(  # type: ignore
                 system_prompt,
                 generation_config=generation_config,
                 safety_settings=safety_settings,
@@ -823,12 +824,6 @@ class GeminiAI:
 - Ưu tiên thông tin từ workspace khi có liên quan
 - Bổ sung kiến thức mới nhất từ Gemini khi cần thiết
 - Cung cấp examples cụ thể và practical
-
-📝 FORMAT RESPONSE MÀU SẮC:
-- Câu trả lời chính: Ngắn gọn, chính xác với emoji
-- Chi tiết: Dùng bullet points (•) cho danh sách
-- Examples: Code snippets hoặc use cases thực tế
-- Tips: Lời khuyên thực tế cho developer
 
 🎓 CHUYÊN MÔN FOCUS:
 - Hugging Face ecosystem (Hub, Transformers, Datasets, Spaces)
@@ -1502,7 +1497,7 @@ class InterviewAgent:
 
 
 class ChatMode:
-    """Chế độ chat tương tác với Gemini AI - Thay thế hoàn toàn rule-based"""
+    """Chế độ chat tương tác với AI Ollama"""
 
     def __init__(self, agent: InterviewAgent):
         self.agent = agent
@@ -1510,23 +1505,83 @@ class ChatMode:
         self.gemini_ai = GeminiAI()
         self.use_ai = self.gemini_ai.is_available
 
+        # Initialize Hybrid AI system safely
+        self._initialize_hybrid_ai_safely()
+
+    def _initialize_hybrid_ai_safely(self):
+        """Khởi tạo Hybrid AI một cách an toàn"""
+        try:
+            # Thử khởi tạo với Gemini
+            if self.gemini_ai.is_available:
+                # Tạo mock Ollama AI cho testing
+                class MockOllamaAI:
+                    def __init__(self):
+                        self.model_name = 'llama3:8b'
+                        self.is_available = False
+
+                    def generate_response(
+                        self, prompt: str, context: str = '', max_tokens: int = 500
+                    ) -> AIResponse:
+                        return AIResponse(
+                            content='Mock response từ Ollama (chưa khả dụng)',
+                            source='mock',
+                            confidence=0.5,
+                        )
+
+                # Tạo hybrid AI với mock Ollama
+                self.hybrid_ai = type(
+                    'HybridAI',
+                    (),
+                    {
+                        'gemini_ai': self.gemini_ai,
+                        'ollama_ai': MockOllamaAI(),
+                        '_auto_optimize_ollama': lambda: {
+                            'status': 'mock',
+                            'message': 'Demo mode',
+                        },
+                        '_learn_from_gemini': lambda q: console.print(
+                            '[blue]📚 Mock learning session[/blue]'
+                        ),
+                        'get_training_stats': lambda: {
+                            'total_gemini_calls': 0,
+                            'total_ollama_calls': 0,
+                            'learning_sessions': 0,
+                            'current_model': 'Mock Model',
+                            'last_optimization': 'Never',
+                        },
+                    },
+                )()
+
+                console.print(
+                    '[green]✅ Hybrid AI System initialized (Mock mode)[/green]'
+                )
+                return True
+
+        except Exception as e:
+            console.print(f'[yellow]⚠️ Hybrid AI initialization failed: {e}[/yellow]')
+            self.hybrid_ai = None
+            return False
+
     def start_chat(self):
-        """Bắt đầu chế độ chat với Gemini AI"""
-        ai_status = '🚀 Gemini AI' if self.use_ai else '❌ AI không khả dụng'
+        """Bắt đầu chế độ chat với Hybrid AI System"""
+        ai_status = (
+            '🚀 Hybrid AI (Gemini + Ollama)' if self.use_ai else '❌ AI không khả dụng'
+        )
         console.print(
             Panel.fit(
                 f'[bold green]💬 Enhanced AI Chat Assistant ({ai_status})[/bold green]\n'
                 '🎯 Chuyên gia phỏng vấn Hugging Face & Machine Learning\n'
                 "Gõ 'quit' để thoát, 'interview' để chuyển sang chế độ phỏng vấn\n"
-                "Gõ 'stats' để xem thống kê workspace, 'help' để xem trợ giúp",
-                title='🤖 Gemini AI Interview Expert',
+                "Gõ 'stats' để xem thống kê, 'train' để tối ưu model, 'help' để xem trợ giúp\n"
+                'Commands: stats | train | metrics | learn | help | interview | quit',
+                title='🤖 Hybrid AI Interview Expert',
                 border_style='green',
             )
         )
 
         if not self.use_ai:
             console.print(
-                '[red]⚠️ Gemini AI không khả dụng. Vui lòng kiểm tra API key trong .env[/red]'
+                '[red]⚠️ AI không khả dụng. Vui lòng kiểm tra API key trong .env[/red]'
             )
             return
 
@@ -1551,10 +1606,31 @@ class ChatMode:
                     self._show_chat_help()
                     continue
 
-                # Xử lý câu hỏi với Gemini AI
+                if user_input.lower() == 'train':
+                    console.print('\n[blue]🔧 Bắt đầu auto-optimization...[/blue]')
+                    if hasattr(self, 'hybrid_ai'):
+                        result = self.hybrid_ai._auto_optimize_ollama()  # type: ignore
+                        self._show_training_result(result)
+                    else:
+                        console.print('[yellow]⚠️ Hybrid AI chưa được khởi tạo[/yellow]')
+                    continue
+
+                if user_input.lower() == 'metrics':
+                    self._show_training_metrics()
+                    continue
+
+                if user_input.lower() == 'learn':
+                    console.print('\n[blue]📚 Bắt đầu session học từ Gemini...[/blue]')
+                    if hasattr(self, 'hybrid_ai'):
+                        self.hybrid_ai._learn_from_gemini(user_input)  # type: ignore
+                    else:
+                        console.print('[yellow]⚠️ Hybrid AI chưa được khởi tạo[/yellow]')
+                    continue
+
+                # Xử lý câu hỏi với AI
                 response = self.process_question_with_ai(user_input)
 
-                console.print('\n[bold green]🤖 Gemini AI Expert[/bold green]')
+                console.print('\n[bold green]🤖 Hybrid AI Expert[/bold green]')
                 console.print(Panel(response, border_style='green'))
 
             except KeyboardInterrupt:
@@ -1624,7 +1700,7 @@ class ChatMode:
 • Sử dụng context từ workspace để có câu trả lời chính xác nhất
 
 [yellow]🚀 Powered by:[/yellow]
-• Google Gemini 3.0 Flash - Latest AI model
+• Google Gemini 2.0 Flash - Latest AI model
 • Workspace Knowledge Integration
 • Advanced Prompt Engineering
 """
@@ -1668,7 +1744,7 @@ class ChatMode:
         )
 
     def process_question_with_ai(self, question: str) -> str:
-        """Xử lý câu hỏi với Gemini AI - Thay thế hoàn toàn rule-based"""
+        """Xử lý câu hỏi với AI Ollama"""
         try:
             # Tạo context từ knowledge base
             context = self._build_context(question)
@@ -1684,7 +1760,7 @@ class ChatMode:
 
         except Exception as e:
             console.print(f'[red]Lỗi AI: {e}[/red]')
-            return f'❌ Lỗi khi xử lý câu hỏi với Gemini AI: {str(e)}\n\nVui lòng thử lại hoặc kiểm tra kết nối mạng.'
+            return self.process_question_rule_based(question)
 
     def _format_ai_response(self, ai_response: AIResponse, question: str) -> str:
         """Format AI response với template đẹp và clean"""
@@ -1717,13 +1793,12 @@ class ChatMode:
                 lines.append('')
 
         # Footer với source info
-        if ai_response.source == 'gemini':
-            lines.append('🔍 Powered by:')
+        if ai_response.source == 'ollama':
+            lines.append('🔍 Analysis based on:')
             lines.append(
                 f'   • Knowledge Base: {len(self.agent.knowledge_base)} documents'
             )
-            lines.append('   • AI Model: TuTran Gemini 3.0 Flash')
-            lines.append('   • Knowledge Fusion: Workspace + Latest AI Data')
+            lines.append('   • AI Model: Ollama Llama3')
 
         return '\n'.join(lines)
 
@@ -1825,8 +1900,307 @@ class ChatMode:
         else:
             return thinking[:100] + '...' if len(thinking) > 100 else thinking
 
-    # Tất cả các phương thức rule-based đã được thay thế bằng Gemini AI
-    # Chỉ sử dụng process_question_with_ai() cho mọi truy vấn
+    def process_question_rule_based(self, question: str) -> str:
+        """Xử lý câu hỏi theo rule-based (phương pháp cũ)"""
+        return self.process_question(question)
+
+    def process_question(self, question: str) -> str:
+        """Xử lý câu hỏi và trả lời dựa trên knowledge base"""
+        question_lower = question.lower()
+
+        # Tìm kiến thức liên quan
+        relevant_knowledge = []
+        for knowledge in self.agent.knowledge_base:
+            for keyword in knowledge.keywords:
+                if keyword in question_lower:
+                    relevant_knowledge.append(knowledge)
+                    break
+
+        # Nếu không tìm thấy kiến thức liên quan, tìm theo content
+        if not relevant_knowledge:
+            for knowledge in self.agent.knowledge_base:
+                if any(
+                    word in knowledge.content.lower() for word in question_lower.split()
+                ):
+                    relevant_knowledge.append(knowledge)
+
+        if relevant_knowledge:
+            return self._format_rule_based_response(relevant_knowledge, question)
+        else:
+            return self._format_no_results_response()
+
+    def _format_rule_based_response(
+        self, relevant_knowledge: List[Knowledge], question: str
+    ) -> str:
+        """Format rule-based response với template đẹp"""
+        lines = []
+
+        # Header
+        lines.append('📚 Knowledge Base Search ✅')
+        lines.append('')
+
+        # Main content
+        lines.append('📋 Found Information:')
+        lines.append('─' * 50)
+
+        for i, knowledge in enumerate(
+            relevant_knowledge[:2], 1
+        ):  # Chỉ lấy 2 tài liệu đầu
+            lines.append(f'\n� Source {i}: {self._clean_markdown(knowledge.title)}')
+            lines.append('─' * 30)
+
+            # Sử dụng smart search để tìm nội dung liên quan
+            smart_results = self._smart_search(question, knowledge)
+
+            if smart_results:
+                # Hiển thị kết quả tìm kiếm thông minh
+                for result in smart_results[:3]:  # Giới hạn 3 kết quả
+                    cleaned_result = self._clean_markdown(result)
+                    if cleaned_result and len(cleaned_result) > 10:
+                        # Format với indentation - loại bỏ bullet có sẵn
+                        formatted_result = self._format_single_result(cleaned_result)
+                        # Loại bỏ bullet ở đầu nếu có
+                        if formatted_result.startswith('• '):
+                            formatted_result = formatted_result[2:]
+                        lines.append(f'   • {formatted_result}')
+            else:
+                # Fallback: extract key points
+                key_points = self._extract_key_points(knowledge.content)
+                if key_points:
+                    for point in key_points[:3]:  # Giới hạn 3 điểm
+                        lines.append(f'   • {point}')
+                else:
+                    # Final fallback: clean content summary
+                    summary = self._create_summary(knowledge.content)
+                    lines.append(f'   {summary}')
+
+            lines.append(f'\n   📁 From: {Path(knowledge.source_file).name}')
+
+        # Footer
+        lines.append('')
+        lines.append('🔍 Search based on:')
+        lines.append('   • Keyword matching and content analysis')
+        lines.append(f'   • Knowledge Base: {len(self.agent.knowledge_base)} documents')
+
+        return '\n'.join(lines)
+
+    def _format_no_results_response(self) -> str:
+        """Format response khi không tìm thấy kết quả"""
+        lines = []
+
+        lines.append('📚 Knowledge Base Search ❌')
+        lines.append('')
+        lines.append('📋 No Direct Match Found')
+        lines.append('─' * 50)
+        lines.append('')
+        lines.append('💡 Suggestions:')
+        lines.append('   • Try asking about: Hugging Face, Models, Hub, API')
+        lines.append("   • Switch to interview mode: type 'interview'")
+        lines.append("   • Toggle AI mode: type 'ai'")
+        lines.append('')
+        lines.append('🔍 Available Resources:')
+        lines.append(f'   • Knowledge Base: {len(self.agent.knowledge_base)} documents')
+        lines.append(f'   • Question Bank: {len(self.agent.questions)} questions')
+
+        return '\n'.join(lines)
+
+    def _format_single_result(self, result: str) -> str:
+        """Format một kết quả tìm kiếm"""
+        # Loại bỏ ký tự thừa và format đẹp
+        result = result.strip()
+
+        # Nếu quá dài, cắt ngắn
+        if len(result) > 120:
+            result = result[:120] + '...'
+
+        return result
+
+    def _create_summary(self, content: str) -> str:
+        """Tạo summary ngắn gọn từ content"""
+        # Lấy câu đầu tiên hoặc đoạn đầu
+        sentences = content.split('.')
+        if sentences and len(sentences[0].strip()) > 20:
+            summary = sentences[0].strip()
+            if len(summary) > 150:
+                summary = summary[:150] + '...'
+            return summary
+        else:
+            # Fallback: lấy đoạn đầu
+            paragraphs = content.split('\n\n')
+            if paragraphs:
+                first_para = paragraphs[0].strip()
+                if len(first_para) > 200:
+                    first_para = first_para[:200] + '...'
+                return self._clean_markdown(first_para)
+
+        return 'Content available but requires specific keywords to search.'
+
+    def _clean_markdown(self, text: str) -> str:
+        """Loại bỏ các ký tự markdown formatting"""
+        if not text:
+            return ''
+
+        # Loại bỏ markdown formatting
+        text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)  # **bold** -> bold
+        text = re.sub(r'\*(.*?)\*', r'\1', text)  # *italic* -> italic
+        text = re.sub(r'`(.*?)`', r'\1', text)  # `code` -> code
+        text = re.sub(r'#{1,6}\s*', '', text)  # ## heading -> heading
+        text = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', text)  # [text](url) -> text
+        text = re.sub(
+            r'^\s*[-*+]\s*', '• ', text, flags=re.MULTILINE
+        )  # - item -> • item
+
+        return text.strip()
+
+    def _format_content(self, content: str) -> str:
+        """Format nội dung để hiển thị đẹp hơn"""
+        lines = content.split('\n')
+        formatted_lines = []
+
+        for line in lines:
+            line = line.strip()
+            if line:
+                if line.startswith('•'):
+                    formatted_lines.append(line)
+                else:
+                    formatted_lines.append(f'{line}')
+
+        return '\n'.join(formatted_lines[:4])  # Giới hạn 4 dòng
+
+    def _smart_search(self, question: str, knowledge: Knowledge) -> List[str]:
+        """Tìm kiếm thông minh trong knowledge base"""
+        question_words = set(question.lower().split())
+        lines = knowledge.content.split('\n')
+        scored_lines = []
+
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+
+            # Tính điểm relevance
+            line_words = set(line.lower().split())
+            score = len(question_words.intersection(line_words))
+
+            # Bonus điểm cho dòng chứa từ khóa quan trọng
+            if any(
+                keyword in line.lower()
+                for keyword in ['hugging face', 'model', 'api', 'hub']
+            ):
+                score += 2
+
+            if score > 0:
+                scored_lines.append((score, line))
+
+        # Sort theo điểm và lấy top results
+        scored_lines.sort(key=lambda x: x[0], reverse=True)
+        return [line for score, line in scored_lines[:5]]
+
+    def _extract_key_points(self, content: str) -> List[str]:
+        """Trích xuất các điểm chính từ nội dung"""
+        lines = content.split('\n')
+        key_points = []
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            # Tìm các bullet points
+            if line.startswith(('- ', '• ', '* ')):
+                cleaned = self._clean_markdown(line[2:].strip())
+                if cleaned:
+                    key_points.append(cleaned)
+
+            # Tìm các heading quan trọng
+            elif line.startswith('###'):
+                cleaned = self._clean_markdown(line[3:].strip())
+                if cleaned:
+                    key_points.append(f'📌 {cleaned}')
+
+        return key_points[:6]  # Giới hạn 6 điểm chính
+
+    def _show_training_result(self, result: Dict[str, Any]):
+        """Hiển thị kết quả training/optimization"""
+        if result.get('status') == 'optimized':
+            console.print('\n[green]✅ Model optimization hoàn thành![/green]')
+
+            # Tạo bảng kết quả
+            results_table = Table(
+                title='📊 Optimization Results', title_style='bold green'
+            )
+            results_table.add_column('Metric', style='cyan')
+            results_table.add_column('Value', style='white')
+
+            results_table.add_row(
+                'Previous Accuracy', f'{result.get("previous_accuracy", 0):.1%}'
+            )
+            results_table.add_row(
+                'New Accuracy', f'{result.get("new_accuracy", 0):.1%}'
+            )
+            results_table.add_row(
+                'Training Samples', str(result.get('training_samples', 0))
+            )
+            results_table.add_row(
+                'Optimization Time', f'{result.get("optimization_time", 0):.1f}s'
+            )
+
+            console.print(results_table)
+
+        elif result.get('status') == 'no_optimization_needed':
+            console.print(
+                f'\n[yellow]✅ Model đã tối ưu (Accuracy: {result.get("current_accuracy", 0):.1%})[/yellow]'
+            )
+
+        elif result.get('status') == 'error':
+            console.print(
+                f'\n[red]❌ Lỗi optimization: {result.get("error", "Unknown error")}[/red]'
+            )
+        else:
+            console.print(f'\n[blue]📋 Training Result: {result}[/blue]')
+
+    def _show_training_metrics(self):
+        """Hiển thị metrics của training system"""
+        if not hasattr(self, 'hybrid_ai') or not self.hybrid_ai:
+            console.print('[yellow]⚠️ Hybrid AI system chưa được khởi tạo[/yellow]')
+            return
+
+        try:
+            stats = self.hybrid_ai.get_training_stats()  # type: ignore
+
+            # Tạo bảng metrics
+            metrics_table = Table(title='📈 Training Metrics', title_style='bold blue')
+            metrics_table.add_column('Metric', style='cyan')
+            metrics_table.add_column('Value', style='white')
+
+            metrics_table.add_row(
+                'Gemini API Calls', str(stats.get('total_gemini_calls', 0))
+            )
+            metrics_table.add_row(
+                'Ollama API Calls', str(stats.get('total_ollama_calls', 0))
+            )
+            metrics_table.add_row(
+                'Learning Sessions', str(stats.get('learning_sessions', 0))
+            )
+            metrics_table.add_row('Current Model', stats.get('current_model', 'N/A'))
+            metrics_table.add_row(
+                'Last Optimization', str(stats.get('last_optimization', 'Never'))
+            )
+
+            console.print(metrics_table)
+
+            # Performance metrics
+            perf_metrics = stats.get('performance_metrics', {})
+            if perf_metrics:
+                console.print('\n[bold]📊 Performance Metrics:[/bold]')
+                for key, value in perf_metrics.items():
+                    if isinstance(value, float):
+                        console.print(f'  {key}: {value:.2f}')
+                    else:
+                        console.print(f'  {key}: {value}')
+
+        except Exception as e:
+            console.print(f'[red]❌ Lỗi khi hiển thị metrics: {e}[/red]')
 
 
 @click.command()
