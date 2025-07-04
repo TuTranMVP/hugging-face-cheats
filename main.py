@@ -74,7 +74,9 @@ class MarkdownParser:
             question_blocks = content.split('---')
 
             for block in question_blocks:
-                if 'exercise_' in block and '**Question:**' in block:
+                if 'exercise_' in block and (
+                    '**Question:**' in block or '**Câu hỏi:**' in block
+                ):
                     question = self._parse_question_block(block)
                     if question:
                         questions.append(question)
@@ -94,24 +96,26 @@ class MarkdownParser:
 
             exercise_id = exercise_match.group(1)
 
-            # Tìm title
-            title_match = re.search(r'\*\*Title:\*\*\s*(.+)', block)
+            # Tìm title (hỗ trợ cả tiếng Anh và tiếng Việt)
+            title_match = re.search(r'\*\*(?:Title|Tiêu đề):\*\*\s*(.+)', block)
             title = (
                 title_match.group(1).strip()
                 if title_match
                 else f'Question {exercise_id}'
             )
 
-            # Tìm description
-            desc_match = re.search(r'\*\*Description:\*\*\s*(.+)', block)
+            # Tìm description (hỗ trợ cả tiếng Anh và tiếng Việt)
+            desc_match = re.search(r'\*\*(?:Description|Mô tả):\*\*\s*(.+)', block)
             description = desc_match.group(1).strip() if desc_match else ''
 
-            # Tìm question
-            question_match = re.search(r'\*\*Question:\*\*\s*(.+)', block)
+            # Tìm question (hỗ trợ cả tiếng Anh và tiếng Việt)
+            question_match = re.search(r'\*\*(?:Question|Câu hỏi):\*\*\s*(.+)', block)
             question = question_match.group(1).strip() if question_match else ''
 
-            # Tìm options
-            options_section = re.search(r'\*\*Options:\*\*\s*\n((?:- .+\n?)+)', block)
+            # Tìm options (hỗ trợ cả tiếng Anh và tiếng Việt)
+            options_section = re.search(
+                r'\*\*(?:Options|Các lựa chọn):\*\*\s*\n((?:- .+\n?)+)', block
+            )
             options = []
             if options_section:
                 option_lines = options_section.group(1).strip().split('\n')
@@ -121,12 +125,16 @@ class MarkdownParser:
                     if line.strip().startswith('- ')
                 ]
 
-            # Tìm correct answer
-            answer_match = re.search(r'\*\*Correct Answer:\*\*\s*(.+)', block)
+            # Tìm correct answer (hỗ trợ cả tiếng Anh và tiếng Việt)
+            answer_match = re.search(
+                r'\*\*(?:Correct Answer|Đáp án đúng):\*\*\s*(.+)', block
+            )
             correct_answer = answer_match.group(1).strip() if answer_match else ''
 
-            # Tìm explanation
-            explanation_match = re.search(r'\*\*Explanation:\*\*\s*(.+)', block)
+            # Tìm explanation (hỗ trợ cả tiếng Anh và tiếng Việt)
+            explanation_match = re.search(
+                r'\*\*(?:Explanation|Giải thích):\*\*\s*(.+)', block
+            )
             explanation = (
                 explanation_match.group(1).strip() if explanation_match else ''
             )
@@ -726,7 +734,7 @@ class ChatMode:
 
         # Tạo context
         context = ''
-        for score, knowledge in relevant_knowledge[:3]:  # Lấy top 3
+        for _score, knowledge in relevant_knowledge[:3]:  # Lấy top 3
             context += f'## {knowledge.title}\n'
             context += f'Source: {Path(knowledge.source_file).name}\n'
             context += f'Content: {knowledge.content[:800]}...\n\n'
@@ -755,110 +763,114 @@ class ChatMode:
     def _format_ai_response(self, ai_response: AIResponse, question: str) -> str:
         """Format AI response với template đẹp và clean"""
         lines = []
-        
+
         # Header với confidence
         confidence_emoji = self._get_confidence_emoji(ai_response.confidence)
-        lines.append(f"🤖 AI Analysis {confidence_emoji} ({ai_response.confidence:.0%} confidence)")
-        lines.append("")
-        
+        lines.append(
+            f'🤖 AI Analysis {confidence_emoji} ({ai_response.confidence:.0%} confidence)'
+        )
+        lines.append('')
+
         # Main content - làm sạch và format
         clean_content = self._clean_ai_content(ai_response.content)
         if clean_content:
-            lines.append("📋 Answer:")
-            lines.append("─" * 50)
+            lines.append('📋 Answer:')
+            lines.append('─' * 50)
             lines.extend(self._format_content_lines(clean_content))
-            lines.append("")
-        
+            lines.append('')
+
         # Thinking process (nếu có) - compact format
         if ai_response.thinking_process:
             thinking_clean = self._clean_ai_content(ai_response.thinking_process)
             if thinking_clean and len(thinking_clean) > 20:  # Chỉ hiện nếu có nội dung
-                lines.append("💭 AI Reasoning:")
-                lines.append("─" * 30)
+                lines.append('💭 AI Reasoning:')
+                lines.append('─' * 30)
                 # Rút gọn thinking process
                 thinking_summary = self._summarize_thinking(thinking_clean)
-                lines.append(f"   {thinking_summary}")
-                lines.append("")
-        
+                lines.append(f'   {thinking_summary}')
+                lines.append('')
+
         # Footer với source info
-        if ai_response.source == "ollama":
-            lines.append("🔍 Analysis based on:")
-            lines.append(f"   • Knowledge Base: {len(self.agent.knowledge_base)} documents")
-            lines.append("   • AI Model: Ollama Llama3")
-        
-        return "\n".join(lines)
-    
+        if ai_response.source == 'ollama':
+            lines.append('🔍 Analysis based on:')
+            lines.append(
+                f'   • Knowledge Base: {len(self.agent.knowledge_base)} documents'
+            )
+            lines.append('   • AI Model: Ollama Llama3')
+
+        return '\n'.join(lines)
+
     def _get_confidence_emoji(self, confidence: float) -> str:
         """Lấy emoji phù hợp với confidence level"""
         if confidence >= 0.8:
-            return "🎯"  # High confidence
+            return '🎯'  # High confidence
         elif confidence >= 0.6:
-            return "✅"  # Good confidence
+            return '✅'  # Good confidence
         elif confidence >= 0.4:
-            return "⚠️"   # Medium confidence
+            return '⚠️'  # Medium confidence
         else:
-            return "❓"  # Low confidence
-    
+            return '❓'  # Low confidence
+
     def _clean_ai_content(self, content: str) -> str:
         """Làm sạch content AI, loại bỏ markdown và formatting không cần thiết"""
         if not content:
-            return ""
-        
+            return ''
+
         # Loại bỏ markdown formatting
         content = re.sub(r'\*\*(.*?)\*\*', r'\1', content)  # **bold** -> bold
-        content = re.sub(r'\*(.*?)\*', r'\1', content)      # *italic* -> italic
-        content = re.sub(r'`(.*?)`', r'\1', content)        # `code` -> code
-        content = re.sub(r'#{1,6}\s*', '', content)         # headings
+        content = re.sub(r'\*(.*?)\*', r'\1', content)  # *italic* -> italic
+        content = re.sub(r'`(.*?)`', r'\1', content)  # `code` -> code
+        content = re.sub(r'#{1,6}\s*', '', content)  # headings
         content = re.sub(r'\[(.*?)\]\(.*?\)', r'\1', content)  # links
-        
+
         # Làm sạch các ký tự đặc biệt - CẨN THẬN KHÔNG LẶP
         # Chỉ chuẩn hóa các dấu bullet ở đầu dòng
         content = re.sub(r'^[\s]*[-\*]\s+', '• ', content, flags=re.MULTILINE)
-        content = re.sub(r'\n\s*\n\s*\n', '\n\n', content) # Loại bỏ line breaks thừa
-        
+        content = re.sub(r'\n\s*\n\s*\n', '\n\n', content)  # Loại bỏ line breaks thừa
+
         # Loại bỏ các thẻ thinking
         content = re.sub(r'<thinking>.*?</thinking>', '', content, flags=re.DOTALL)
-        
+
         return content.strip()
-    
+
     def _format_content_lines(self, content: str) -> List[str]:
         """Format content thành các dòng đẹp với indentation"""
         lines = content.split('\n')
         formatted = []
-        
+
         for line in lines:
             line = line.strip()
             if not line:
                 continue
-            
+
             # Bullet points
             if line.startswith('•'):
-                formatted.append(f"   {line}")
+                formatted.append(f'   {line}')
             # Numbered lists
             elif re.match(r'^\d+\.', line):
-                formatted.append(f"   {line}")
+                formatted.append(f'   {line}')
             # Headers or important lines
             elif line.isupper() or line.endswith(':'):
-                formatted.append(f"\n   {line}")
+                formatted.append(f'\n   {line}')
             # Regular content
             else:
                 # Wrap long lines
                 if len(line) > 80:
                     wrapped = self._wrap_text(line, 80)
                     for wrapped_line in wrapped:
-                        formatted.append(f"   {wrapped_line}")
+                        formatted.append(f'   {wrapped_line}')
                 else:
-                    formatted.append(f"   {line}")
-        
+                    formatted.append(f'   {line}')
+
         return formatted
-    
+
     def _wrap_text(self, text: str, width: int) -> List[str]:
         """Wrap text để không quá dài"""
         words = text.split()
         lines = []
         current_line = []
         current_length = 0
-        
+
         for word in words:
             if current_length + len(word) + 1 <= width:
                 current_line.append(word)
@@ -868,12 +880,12 @@ class ChatMode:
                     lines.append(' '.join(current_line))
                 current_line = [word]
                 current_length = len(word)
-        
+
         if current_line:
             lines.append(' '.join(current_line))
-        
+
         return lines
-    
+
     def _summarize_thinking(self, thinking: str) -> str:
         """Tóm tắt thinking process để hiển thị gọn"""
         # Lấy câu đầu tiên hoặc 100 ký tự đầu
@@ -881,10 +893,10 @@ class ChatMode:
         if sentences and len(sentences[0]) > 20:
             summary = sentences[0].strip()
             if len(summary) > 100:
-                summary = summary[:100] + "..."
+                summary = summary[:100] + '...'
             return summary
         else:
-            return thinking[:100] + "..." if len(thinking) > 100 else thinking
+            return thinking[:100] + '...' if len(thinking) > 100 else thinking
 
     def process_question_rule_based(self, question: str) -> str:
         """Xử lý câu hỏi theo rule-based (phương pháp cũ)"""
@@ -914,26 +926,30 @@ class ChatMode:
             return self._format_rule_based_response(relevant_knowledge, question)
         else:
             return self._format_no_results_response()
-    
-    def _format_rule_based_response(self, relevant_knowledge: List[Knowledge], question: str) -> str:
+
+    def _format_rule_based_response(
+        self, relevant_knowledge: List[Knowledge], question: str
+    ) -> str:
         """Format rule-based response với template đẹp"""
         lines = []
-        
+
         # Header
-        lines.append("📚 Knowledge Base Search ✅")
-        lines.append("")
-        
+        lines.append('📚 Knowledge Base Search ✅')
+        lines.append('')
+
         # Main content
-        lines.append("📋 Found Information:")
-        lines.append("─" * 50)
-        
-        for i, knowledge in enumerate(relevant_knowledge[:2], 1):  # Chỉ lấy 2 tài liệu đầu
-            lines.append(f"\n� Source {i}: {self._clean_markdown(knowledge.title)}")
-            lines.append("─" * 30)
-            
+        lines.append('📋 Found Information:')
+        lines.append('─' * 50)
+
+        for i, knowledge in enumerate(
+            relevant_knowledge[:2], 1
+        ):  # Chỉ lấy 2 tài liệu đầu
+            lines.append(f'\n� Source {i}: {self._clean_markdown(knowledge.title)}')
+            lines.append('─' * 30)
+
             # Sử dụng smart search để tìm nội dung liên quan
             smart_results = self._smart_search(question, knowledge)
-            
+
             if smart_results:
                 # Hiển thị kết quả tìm kiếm thông minh
                 for result in smart_results[:3]:  # Giới hạn 3 kết quả
@@ -944,59 +960,59 @@ class ChatMode:
                         # Loại bỏ bullet ở đầu nếu có
                         if formatted_result.startswith('• '):
                             formatted_result = formatted_result[2:]
-                        lines.append(f"   • {formatted_result}")
+                        lines.append(f'   • {formatted_result}')
             else:
                 # Fallback: extract key points
                 key_points = self._extract_key_points(knowledge.content)
                 if key_points:
                     for point in key_points[:3]:  # Giới hạn 3 điểm
-                        lines.append(f"   • {point}")
+                        lines.append(f'   • {point}')
                 else:
                     # Final fallback: clean content summary
                     summary = self._create_summary(knowledge.content)
-                    lines.append(f"   {summary}")
-            
-            lines.append(f"\n   📁 From: {Path(knowledge.source_file).name}")
-        
+                    lines.append(f'   {summary}')
+
+            lines.append(f'\n   📁 From: {Path(knowledge.source_file).name}')
+
         # Footer
-        lines.append("")
-        lines.append("🔍 Search based on:")
-        lines.append(f"   • Keyword matching and content analysis")
-        lines.append(f"   • Knowledge Base: {len(self.agent.knowledge_base)} documents")
-        
-        return "\n".join(lines)
-    
+        lines.append('')
+        lines.append('🔍 Search based on:')
+        lines.append('   • Keyword matching and content analysis')
+        lines.append(f'   • Knowledge Base: {len(self.agent.knowledge_base)} documents')
+
+        return '\n'.join(lines)
+
     def _format_no_results_response(self) -> str:
         """Format response khi không tìm thấy kết quả"""
         lines = []
-        
-        lines.append("📚 Knowledge Base Search ❌")
-        lines.append("")
-        lines.append("📋 No Direct Match Found")
-        lines.append("─" * 50)
-        lines.append("")
-        lines.append("💡 Suggestions:")
-        lines.append("   • Try asking about: Hugging Face, Models, Hub, API")
+
+        lines.append('📚 Knowledge Base Search ❌')
+        lines.append('')
+        lines.append('📋 No Direct Match Found')
+        lines.append('─' * 50)
+        lines.append('')
+        lines.append('💡 Suggestions:')
+        lines.append('   • Try asking about: Hugging Face, Models, Hub, API')
         lines.append("   • Switch to interview mode: type 'interview'")
         lines.append("   • Toggle AI mode: type 'ai'")
-        lines.append("")
-        lines.append("🔍 Available Resources:")
-        lines.append(f"   • Knowledge Base: {len(self.agent.knowledge_base)} documents")
-        lines.append(f"   • Question Bank: {len(self.agent.questions)} questions")
-        
-        return "\n".join(lines)
-    
+        lines.append('')
+        lines.append('🔍 Available Resources:')
+        lines.append(f'   • Knowledge Base: {len(self.agent.knowledge_base)} documents')
+        lines.append(f'   • Question Bank: {len(self.agent.questions)} questions')
+
+        return '\n'.join(lines)
+
     def _format_single_result(self, result: str) -> str:
         """Format một kết quả tìm kiếm"""
         # Loại bỏ ký tự thừa và format đẹp
         result = result.strip()
-        
+
         # Nếu quá dài, cắt ngắn
         if len(result) > 120:
-            result = result[:120] + "..."
-        
+            result = result[:120] + '...'
+
         return result
-    
+
     def _create_summary(self, content: str) -> str:
         """Tạo summary ngắn gọn từ content"""
         # Lấy câu đầu tiên hoặc đoạn đầu
@@ -1004,7 +1020,7 @@ class ChatMode:
         if sentences and len(sentences[0].strip()) > 20:
             summary = sentences[0].strip()
             if len(summary) > 150:
-                summary = summary[:150] + "..."
+                summary = summary[:150] + '...'
             return summary
         else:
             # Fallback: lấy đoạn đầu
@@ -1012,10 +1028,10 @@ class ChatMode:
             if paragraphs:
                 first_para = paragraphs[0].strip()
                 if len(first_para) > 200:
-                    first_para = first_para[:200] + "..."
+                    first_para = first_para[:200] + '...'
                 return self._clean_markdown(first_para)
-        
-        return "Content available but requires specific keywords to search."
+
+        return 'Content available but requires specific keywords to search.'
 
     def _clean_markdown(self, text: str) -> str:
         """Loại bỏ các ký tự markdown formatting"""
