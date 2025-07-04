@@ -3,14 +3,27 @@
 ## Tổng quan
 AI Interview Agent là một công cụ CLI chatbox tương tác với **tích hợp AI Ollama llama3:8b** để phân tích dữ liệu từ các file .md và mô phỏng phỏng vấn kiến thức về Hugging Face một cách thông minh và chính xác.
 
-## ✨ Tính năng mới - AI Ollama Integration
+## ✨ Tính năng mới - Enhanced Workspace Loading
 
-### 🤖 AI Mode (Ollama llama3:8b)
-- **Phân tích thông minh**: Sử dụng LLM để hiểu câu hỏi và context
-- **Thinking Process**: Hiển thị quá trình suy luận của AI
-- **Context-aware**: Tổng hợp thông tin từ knowledge base
-- **Confidence Scoring**: Đánh giá độ tin cậy của câu trả lời
-- **Smart Response**: Trả lời chi tiết với ví dụ và giải thích
+### 🔍 Workspace Discovery & Smart Loading
+- **Auto-discover**: Tự động khám phá cấu trúc workspace
+- **Selective Loading**: Chọn folders cụ thể để nạp
+- **Multi-format Support**: Markdown, Python, JSON, YAML
+- **Intelligent Parsing**: Phân tích code và trích xuất thông tin
+- **Performance Optimization**: Cache và tối ưu memory
+
+### 🤖 AI Mode (Ollama llama3:8b) - Enhanced
+- **Rich Context**: Xây dựng context từ toàn bộ workspace
+- **Smart Relevance**: Tính toán độ liên quan thông minh
+- **Knowledge Fusion**: Kết hợp multiple sources
+- **Confidence Scoring**: Đánh giá độ tin cậy nâng cao
+- **Enhanced Prompting**: System prompts được tối ưu
+
+### 💬 Interactive Commands - Expanded
+- **Workspace Stats**: `stats` - Hiển thị thống kê workspace
+- **Smart Search**: `search <keyword>` - Tìm kiếm trong knowledge base  
+- **Folder Selection**: Tương tác chọn folders khi loading
+- **Real-time Metrics**: Theo dõi performance và usage
 
 ### 📚 Rule-based Mode (Fallback)
 - **Keyword Search**: Tìm kiếm dựa trên từ khóa
@@ -103,40 +116,45 @@ python main.py [FILES...] [OPTIONS]
 - `-v, --verbose`: Hiển thị thông tin chi tiết
 - `--help`: Hiển thị trợ giúp
 
-### Ví dụ sử dụng
+### Ví dụ sử dụng nâng cao
 
-#### 1. Chế độ phỏng vấn
+#### 1. Workspace Loading (Khuyến nghị)
 ```bash
-python main.py getting-started/questions.md --mode interview
+# Nạp toàn bộ workspace hiện tại
+python main.py --workspace . --mode chat
+
+# Nạp workspace với Python analysis
+python main.py --workspace . --include-python --mode both
+
+# Chọn folders cụ thể
+python main.py --workspace . --folders "getting-started,pipelines,text-classification"
+
+# Loại trừ folders không cần thiết
+python main.py --workspace . --exclude-folders "__pycache__,node_modules" --include-python
 ```
 
-#### 2. Chế độ chat (với AI)
+#### 2. Advanced Configuration
 ```bash
-# Khởi động Ollama trước (nếu muốn dùng AI)
-ollama serve
+# Giới hạn kích thước file (2MB)
+python main.py --workspace . --max-file-size 2097152
 
-# Chạy chat mode
-python main.py getting-started/questions.md getting-started/introduction.md --mode chat
+# Auto-discovery mode (không cần chỉ định gì)
+python main.py --mode chat
+
+# Verbose mode để debug
+python main.py --workspace . --verbose --include-python
 ```
 
-#### 3. Cả hai chế độ
+#### 3. Traditional file loading (vẫn hỗ trợ)
 ```bash
-python main.py *.md --mode both
-```
+# File riêng lẻ
+python main.py getting-started/questions.md getting-started/introduction.md
 
-#### 4. Giới hạn số câu hỏi
-```bash
-python main.py questions.md --mode interview --limit 5
-```
+# Wildcard patterns
+python main.py */questions.md --mode interview
 
-#### 5. Xáo trộn câu hỏi
-```bash
-python main.py questions.md --mode interview --shuffle
-```
-
-#### 6. Chế độ verbose
-```bash
-python main.py *.md --mode both --verbose
+# Với options
+python main.py questions.md --shuffle --limit 10 --mode interview
 ```
 
 ## 🤖 Sử dụng AI Mode
@@ -196,9 +214,17 @@ System: Chuyển sang chế độ: 🤖 AI Ollama
 
 ## 🔧 Demo và Test
 
-### Demo tích hợp AI
+### Demo Enhanced Features
 ```bash
-python demo_ai_integration.py
+# Chạy demo để xem các tính năng mới
+python demo_enhanced_workspace.py
+
+# Test workspace loading
+python main.py --workspace . --folders "getting-started" --verbose
+
+# Full workspace với AI (cần Ollama)
+ollama serve  # Terminal khác
+python main.py --workspace . --include-python --mode chat
 ```
 
 ### Test không cần Ollama

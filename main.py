@@ -8,9 +8,10 @@ from dataclasses import dataclass
 from datetime import datetime
 import os
 from pathlib import Path
+import random
 import re
 import sys
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from bs4 import BeautifulSoup
 import click
@@ -19,7 +20,7 @@ import markdown
 import requests
 from rich.console import Console
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
 from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
@@ -54,6 +55,416 @@ class Knowledge:
     source_file: str
     sections: List[str]
     keywords: List[str]
+    folder: str = ''
+    file_type: str = 'markdown'
+    importance_score: float = 1.0
+
+
+@dataclass
+class WorkspaceConfig:
+    """Cấu hình workspace loading"""
+
+    include_folders: Optional[List[str]] = None  # Folders to include
+    exclude_folders: Optional[List[str]] = None  # Folders to exclude
+    file_patterns: Optional[List[str]] = None  # File patterns to match
+    max_file_size: int = 1024 * 1024  # Max file size in bytes
+    enable_code_analysis: bool = True  # Analyze .py files
+    enable_auto_summary: bool = True  # Auto generate summaries
+
+
+class WorkspaceLoader:
+    """Nâng cấp để nạp toàn bộ workspace thông minh"""
+
+    def __init__(self, config: Optional[WorkspaceConfig] = None):
+        self.config = config or WorkspaceConfig()
+        self.md_parser = markdown.Markdown(extensions=['extra', 'toc'])
+        self.supported_extensions = {'.md', '.txt', '.py', '.json', '.yml', '.yaml'}
+
+    def discover_workspace(self, root_path: str) -> Dict[str, List[str]]:
+        """Khám phá cấu trúc workspace"""
+        workspace_structure = {
+            'folders': [],
+            'markdown_files': [],
+            'python_files': [],
+            'config_files': [],
+            'question_files': [],
+            'knowledge_files': [],
+        }
+
+        root = Path(root_path)
+
+        for path in root.rglob('*'):
+            if path.is_dir():
+                if self._should_include_folder(str(path.relative_to(root))):
+                    workspace_structure['folders'].append(str(path))
+            elif path.is_file():
+                rel_path = str(path.relative_to(root))
+                if self._should_include_file(rel_path):
+                    if path.suffix == '.md':
+                        if 'question' in path.name.lower():
+                            workspace_structure['question_files'].append(str(path))
+                        else:
+                            workspace_structure['knowledge_files'].append(str(path))
+                        workspace_structure['markdown_files'].append(str(path))
+                    elif path.suffix == '.py':
+                        workspace_structure['python_files'].append(str(path))
+                    elif path.suffix in {'.json', '.yml', '.yaml'}:
+                        workspace_structure['config_files'].append(str(path))
+
+        return workspace_structure
+
+    def load_workspace_content(
+        self, root_path: str, selected_folders: Optional[List[str]] = None
+    ) -> List[Knowledge]:
+        """Nạp nội dung workspace với tùy chọn folder"""
+        knowledge_base = []
+
+        if selected_folders:
+            # Load specific folders
+            for folder in selected_folders:
+                folder_path = Path(root_path) / folder
+                if folder_path.exists():
+                    knowledge_base.extend(
+                        self._load_folder_content(folder_path, folder)
+                    )
+        else:
+            # Load all workspace
+            workspace_structure = self.discover_workspace(root_path)
+
+            # Load markdown files
+            for md_file in workspace_structure['knowledge_files']:
+                knowledge = self._load_markdown_file(md_file)
+                if knowledge:
+                    knowledge_base.append(knowledge)
+
+            # Load Python files if enabled
+            if self.config.enable_code_analysis:
+                for py_file in workspace_structure['python_files']:
+                    knowledge = self._load_python_file(py_file)
+                    if knowledge:
+                        knowledge_base.append(knowledge)
+
+        return knowledge_base
+
+    def _load_folder_content(
+        self, folder_path: Path, folder_name: str
+    ) -> List[Knowledge]:
+        """Nạp nội dung từ một folder cụ thể"""
+        knowledge_list = []
+
+        for file_path in folder_path.rglob('*'):
+            if file_path.is_file() and file_path.suffix in self.supported_extensions:
+                if file_path.suffix == '.md':
+                    knowledge = self._load_markdown_file(str(file_path))
+                elif file_path.suffix == '.py':
+                    knowledge = self._load_python_file(str(file_path))
+                else:
+                    knowledge = self._load_text_file(str(file_path))
+
+                if knowledge:
+                    knowledge.folder = folder_name
+                    knowledge_list.append(knowledge)
+
+        return knowledge_list
+
+    def _load_markdown_file(self, file_path: str) -> Optional[Knowledge]:
+        """Nâng cấp load markdown với phân tích sâu hơn"""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as file:
+                content = file.read()
+
+            # Convert markdown to HTML for better parsing
+            html_content = self.md_parser.convert(content)
+            _soup = BeautifulSoup(html_content, 'html.parser')
+
+            # Extract title
+            title = self._extract_title(content, file_path)
+
+            # Extract sections
+            sections = self._extract_sections(content)
+
+            # Extract keywords
+            keywords = self._extract_keywords(content)
+
+            # Calculate importance score
+            importance_score = self._calculate_importance_score(content, file_path)
+
+            return Knowledge(
+                title=title,
+                content=content,
+                source_file=file_path,
+                sections=sections,
+                keywords=keywords,
+                folder=str(Path(file_path).parent.name),
+                file_type='markdown',
+                importance_score=importance_score,
+            )
+
+        except Exception as e:
+            console.print(f'[red]Lỗi khi đọc file {file_path}: {e}[/red]')
+            return None
+
+    def _load_python_file(self, file_path: str) -> Optional[Knowledge]:
+        """Nạp và phân tích file Python"""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as file:
+                content = file.read()
+
+            # Extract docstrings and comments
+            title = f'Python Code: {Path(file_path).name}'
+
+            # Extract function and class definitions
+            sections = self._extract_python_elements(content)
+
+            # Extract technical keywords
+            keywords = self._extract_python_keywords(content)
+
+            # Create summarized content
+            summary_content = self._create_python_summary(content)
+
+            return Knowledge(
+                title=title,
+                content=summary_content,
+                source_file=file_path,
+                sections=sections,
+                keywords=keywords,
+                folder=str(Path(file_path).parent.name),
+                file_type='python',
+                importance_score=0.8,  # Slightly lower than markdown
+            )
+
+        except Exception as e:
+            console.print(f'[red]Lỗi khi đọc file Python {file_path}: {e}[/red]')
+            return None
+
+    def _load_text_file(self, file_path: str) -> Optional[Knowledge]:
+        """Nạp file text thông thường"""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as file:
+                content = file.read()
+
+            if len(content) > self.config.max_file_size:
+                content = (
+                    content[: self.config.max_file_size] + '...\n[Content truncated]'
+                )
+
+            title = f'Text File: {Path(file_path).name}'
+            keywords = self._extract_keywords(content)
+
+            return Knowledge(
+                title=title,
+                content=content,
+                source_file=file_path,
+                sections=[],
+                keywords=keywords,
+                folder=str(Path(file_path).parent.name),
+                file_type='text',
+                importance_score=0.5,
+            )
+
+        except Exception as e:
+            console.print(f'[red]Lỗi khi đọc file text {file_path}: {e}[/red]')
+            return None
+
+    def _should_include_folder(self, folder_path: str) -> bool:
+        """Kiểm tra có nên include folder không"""
+        # Exclude common unnecessary folders
+        exclude_defaults = {
+            '.git',
+            '__pycache__',
+            '.vscode',
+            'node_modules',
+            '.pytest_cache',
+        }
+
+        folder_name = Path(folder_path).name
+        if folder_name in exclude_defaults:
+            return False
+
+        if self.config.exclude_folders:
+            if any(excluded in folder_path for excluded in self.config.exclude_folders):
+                return False
+
+        if self.config.include_folders:
+            return any(
+                included in folder_path for included in self.config.include_folders
+            )
+
+        return True
+
+    def _should_include_file(self, file_path: str) -> bool:
+        """Kiểm tra có nên include file không"""
+        path = Path(file_path)
+
+        # Check file size
+        try:
+            if path.stat().st_size > self.config.max_file_size:
+                return False
+        except:  # noqa: E722
+            return False
+
+        # Check extension
+        if path.suffix not in self.supported_extensions:
+            return False
+
+        # Check patterns
+        if self.config.file_patterns:
+            return any(pattern in file_path for pattern in self.config.file_patterns)
+
+        return True
+
+    def _extract_title(self, content: str, file_path: str) -> str:
+        """Trích xuất title thông minh"""
+        # Try to find first H1 heading
+        h1_match = re.search(r'^#\s+(.+)$', content, re.MULTILINE)
+        if h1_match:
+            return h1_match.group(1).strip()
+
+        # Try to find title in front matter
+        frontmatter_match = re.search(r'^---\s*\ntitle:\s*(.+)$', content, re.MULTILINE)
+        if frontmatter_match:
+            return frontmatter_match.group(1).strip()
+
+        # Use filename as fallback
+        return Path(file_path).stem.replace('_', ' ').replace('-', ' ').title()
+
+    def _extract_sections(self, content: str) -> List[str]:
+        """Trích xuất các sections từ markdown"""
+        sections = []
+
+        # Find all headings
+        heading_pattern = r'^(#{1,6})\s+(.+)$'
+        for match in re.finditer(heading_pattern, content, re.MULTILINE):
+            level = len(match.group(1))
+            title = match.group(2).strip()
+            sections.append(f'{"  " * (level - 1)}{title}')
+
+        return sections
+
+    def _extract_keywords(self, content: str) -> List[str]:
+        """Trích xuất keywords thông minh"""
+        keywords = set()
+
+        # Technical terms (capitalize words)
+        tech_terms = re.findall(r'\b[A-Z][a-z]+(?:[A-Z][a-z]*)*\b', content)
+        keywords.update(tech_terms[:20])
+
+        # Common ML/AI terms
+        ml_terms = [
+            'hugging face',
+            'transformers',
+            'model',
+            'pipeline',
+            'tokenizer',
+            'dataset',
+            'training',
+            'inference',
+            'api',
+            'nlp',
+            'llm',
+            'bert',
+            'gpt',
+            'embedding',
+            'fine-tuning',
+            'classification',
+            'summarization',
+        ]
+
+        content_lower = content.lower()
+        for term in ml_terms:
+            if term in content_lower:
+                keywords.add(term)
+
+        # Extract quoted terms
+        quoted_terms = re.findall(r'["\']([^"\']+)["\']', content)
+        keywords.update(
+            [term for term in quoted_terms if len(term) > 2 and len(term) < 30]
+        )
+
+        return list(keywords)[:30]  # Limit to 30 keywords
+
+    def _calculate_importance_score(self, content: str, file_path: str) -> float:
+        """Tính điểm quan trọng của file"""
+        score = 1.0
+
+        # File name indicators
+        filename = Path(file_path).name.lower()
+        if 'readme' in filename:
+            score += 0.5
+        if 'introduction' in filename:
+            score += 0.3
+        if 'question' in filename:
+            score += 0.4
+
+        # Content quality indicators
+        if len(content) > 1000:
+            score += 0.2
+        if '```' in content:  # Has code blocks
+            score += 0.1
+        if content.count('#') > 3:  # Well structured
+            score += 0.1
+
+        return min(score, 2.0)  # Cap at 2.0
+
+    def _extract_python_elements(self, content: str) -> List[str]:
+        """Trích xuất các elements từ Python code"""
+        elements = []
+
+        # Find functions
+        func_pattern = r'def\s+(\w+)\s*\([^)]*\):'
+        for match in re.finditer(func_pattern, content):
+            elements.append(f'Function: {match.group(1)}')
+
+        # Find classes
+        class_pattern = r'class\s+(\w+)(?:\([^)]*\))?:'
+        for match in re.finditer(class_pattern, content):
+            elements.append(f'Class: {match.group(1)}')
+
+        return elements
+
+    def _extract_python_keywords(self, content: str) -> List[str]:
+        """Trích xuất keywords từ Python code"""
+        keywords = set()
+
+        # Import statements
+        import_pattern = r'(?:from\s+(\S+)\s+)?import\s+([^#\n]+)'
+        for match in re.finditer(import_pattern, content):
+            if match.group(1):
+                keywords.add(match.group(1))
+            imports = match.group(2).split(',')
+            keywords.update([imp.strip() for imp in imports])
+
+        # Function and class names
+        func_class_pattern = r'(?:def|class)\s+(\w+)'
+        for match in re.finditer(func_class_pattern, content):
+            keywords.add(match.group(1))
+
+        return list(keywords)[:20]
+
+    def _create_python_summary(self, content: str) -> str:
+        """Tạo summary cho Python file"""
+        lines = content.split('\n')
+        summary_lines = []
+
+        # Add docstring if exists
+        if '"""' in content:
+            in_docstring = False
+            for line in lines:
+                if '"""' in line and not in_docstring:
+                    in_docstring = True
+                    summary_lines.append(line)
+                elif '"""' in line and in_docstring:
+                    summary_lines.append(line)
+                    break
+                elif in_docstring:
+                    summary_lines.append(line)
+
+        # Add function/class definitions
+        for line in lines:
+            if line.strip().startswith(('def ', 'class ', 'import ', 'from ')):
+                summary_lines.append(line)
+
+        return '\n'.join(summary_lines[:50])  # Limit to 50 lines
 
 
 class MarkdownParser:
@@ -365,7 +776,7 @@ Hãy trả lời ngắn gọn, dễ hiểu và thực tế."""
 
 
 class InterviewAgent:
-    """AI Agent để mô phỏng phỏng vấn"""
+    """AI Agent để mô phỏng phỏng vấn - Enhanced với workspace loading"""
 
     def __init__(self):
         self.questions = []
@@ -379,9 +790,267 @@ class InterviewAgent:
             'start_time': None,
             'end_time': None,
         }
+        self.workspace_loader = WorkspaceLoader()
+        self.workspace_structure = {}
+
+    def load_workspace(
+        self, root_path: str, config: Optional[WorkspaceConfig] = None
+    ) -> Dict[str, Any]:
+        """Nạp toàn bộ workspace với configuration"""
+        if config:
+            self.workspace_loader.config = config
+
+        console.print(f'\n[bold blue]🔍 Khám phá workspace: {root_path}[/bold blue]')
+
+        # Discover workspace structure
+        self.workspace_structure = self.workspace_loader.discover_workspace(root_path)
+
+        # Display workspace structure
+        self._display_workspace_structure()
+
+        # Ask user which folders to load
+        selected_folders = self._select_folders_to_load()
+
+        # Load content
+        with Progress(
+            SpinnerColumn(),
+            TextColumn('[progress.description]{task.description}'),
+            BarColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task('Đang nạp workspace...', total=100)
+
+            # Load knowledge base
+            progress.update(task, description='Nạp knowledge base...', completed=20)
+            self.knowledge_base = self.workspace_loader.load_workspace_content(
+                root_path, selected_folders
+            )
+
+            # Load questions from discovered question files
+            progress.update(task, description='Nạp câu hỏi...', completed=60)
+            parser = MarkdownParser()
+            for question_file in self.workspace_structure['question_files']:
+                questions = parser.parse_questions(question_file)
+                self.questions.extend(questions)
+
+            progress.update(task, description='Hoàn thành!', completed=100)
+
+        # Display loading results
+        self._display_loading_results()
+
+        return {
+            'knowledge_count': len(self.knowledge_base),
+            'question_count': len(self.questions),
+            'folders_loaded': selected_folders or 'all',
+            'workspace_structure': self.workspace_structure,
+        }
+
+    def _display_workspace_structure(self):
+        """Hiển thị cấu trúc workspace"""
+        table = Table(title='📁 Cấu trúc Workspace', title_style='bold blue')
+        table.add_column('Loại', style='cyan', width=20)
+        table.add_column('Số lượng', justify='right', style='magenta')
+        table.add_column('Chi tiết', style='white')
+
+        table.add_row(
+            '📂 Folders',
+            str(len(self.workspace_structure['folders'])),
+            f'Có thể chọn: {len(self.workspace_structure["folders"])}',
+        )
+        table.add_row(
+            '📝 Markdown Files',
+            str(len(self.workspace_structure['markdown_files'])),
+            'Tài liệu và hướng dẫn',
+        )
+        table.add_row(
+            '❓ Question Files',
+            str(len(self.workspace_structure['question_files'])),
+            'Ngân hàng câu hỏi',
+        )
+        table.add_row(
+            '🐍 Python Files',
+            str(len(self.workspace_structure['python_files'])),
+            'Source code và examples',
+        )
+        table.add_row(
+            '⚙️ Config Files',
+            str(len(self.workspace_structure['config_files'])),
+            'Configuration files',
+        )
+
+        console.print(table)
+
+    def _select_folders_to_load(self) -> Optional[List[str]]:
+        """Cho phép user chọn folders để load"""
+        if not self.workspace_structure['folders']:
+            return None
+
+        # Extract unique folder names from full paths
+        folder_names = set()
+        for folder_path in self.workspace_structure['folders']:
+            # Get relative folder names
+            parts = Path(folder_path).parts
+            if len(parts) > 1:  # Not root
+                folder_names.add(parts[-1])  # Last part (folder name)
+
+        folder_list = sorted(folder_names)
+
+        if not folder_list:
+            return None
+
+        console.print(
+            f'\n[bold yellow]📂 Có {len(folder_list)} folders có thể chọn:[/bold yellow]'
+        )
+
+        # Display options
+        table = Table(show_header=True, header_style='bold magenta')
+        table.add_column('Số', style='cyan', width=5)
+        table.add_column('Folder', style='white')
+        table.add_column('Mô tả', style='dim')
+
+        folder_descriptions = {
+            'getting-started': 'Hướng dẫn cơ bản',
+            'pipelines': 'Các pipeline chuyên biệt',
+            'text-classification': 'Phân loại văn bản',
+            'text-summarization': 'Tóm tắt văn bản',
+            'datasets': 'Xử lý dữ liệu',
+            '__pycache__': 'Cache files (không khuyến khích)',
+        }
+
+        for i, folder in enumerate(folder_list, 1):
+            description = folder_descriptions.get(folder, 'Nội dung khác')
+            table.add_row(str(i), folder, description)
+
+        table.add_row('0', '[ALL]', 'Tất cả folders')
+
+        console.print(table)
+
+        # Get user choice
+        try:
+            choice = Prompt.ask(
+                '\n[bold]Chọn folders (ví dụ: 1,2,3 hoặc 0 cho tất cả)[/bold]',
+                default='0',
+            )
+
+            if choice == '0':
+                console.print('[green]✓ Sẽ nạp tất cả folders[/green]')
+                return None  # Load all
+
+            # Parse selected folders
+            selected_indices = [
+                int(x.strip()) for x in choice.split(',') if x.strip().isdigit()
+            ]
+            selected_folders = [
+                folder_list[i - 1]
+                for i in selected_indices
+                if 1 <= i <= len(folder_list)
+            ]
+
+            if selected_folders:
+                console.print(f'[green]✓ Sẽ nạp: {", ".join(selected_folders)}[/green]')
+                return selected_folders
+            else:
+                console.print(
+                    '[yellow]⚠ Không có lựa chọn hợp lệ, sẽ nạp tất cả[/yellow]'
+                )
+                return None
+
+        except (ValueError, KeyboardInterrupt):
+            console.print('[yellow]⚠ Lựa chọn không hợp lệ, sẽ nạp tất cả[/yellow]')
+            return None
+
+    def _display_loading_results(self):
+        """Hiển thị kết quả loading"""
+        console.print('\n[bold green]✅ Đã nạp workspace thành công![/bold green]')
+
+        # Knowledge statistics
+        if self.knowledge_base:
+            kb_stats = self._analyze_knowledge_base()
+
+            stats_table = Table(
+                title='📊 Thống kê Knowledge Base', title_style='bold green'
+            )
+            stats_table.add_column('Thông tin', style='cyan')
+            stats_table.add_column('Giá trị', justify='right', style='white')
+
+            stats_table.add_row('📚 Tổng tài liệu', str(len(self.knowledge_base)))
+            stats_table.add_row('📝 Markdown files', str(kb_stats['markdown_count']))
+            stats_table.add_row('🐍 Python files', str(kb_stats['python_count']))
+            stats_table.add_row('📁 Folders', str(len(kb_stats['folders'])))
+            stats_table.add_row('🔑 Keywords', str(kb_stats['total_keywords']))
+            stats_table.add_row(
+                '📄 Tổng nội dung', f'{kb_stats["total_content_length"]:,} ký tự'
+            )
+
+            console.print(stats_table)
+
+            # Top folders by content
+            if kb_stats['folder_stats']:
+                folder_table = Table(
+                    title='📂 Top Folders theo nội dung', title_style='bold blue'
+                )
+                folder_table.add_column('Folder', style='cyan')
+                folder_table.add_column('Files', justify='right', style='magenta')
+                folder_table.add_column('Content Size', justify='right', style='white')
+
+                for folder, stats in sorted(
+                    kb_stats['folder_stats'].items(),
+                    key=lambda x: x[1]['content_length'],
+                    reverse=True,
+                )[:5]:
+                    folder_table.add_row(
+                        folder,
+                        str(stats['file_count']),
+                        f'{stats["content_length"]:,} chars',
+                    )
+
+                console.print(folder_table)
+
+        # Question statistics
+        if self.questions:
+            console.print(
+                f'[bold yellow]❓ Đã nạp {len(self.questions)} câu hỏi từ {len(self.workspace_structure["question_files"])} files[/bold yellow]'
+            )
+
+    def _analyze_knowledge_base(self) -> Dict[str, Any]:
+        """Phân tích knowledge base để có thống kê"""
+        stats = {
+            'markdown_count': 0,
+            'python_count': 0,
+            'folders': set(),
+            'total_keywords': 0,
+            'total_content_length': 0,
+            'folder_stats': {},
+        }
+
+        for knowledge in self.knowledge_base:
+            # Count by file type
+            if knowledge.file_type == 'markdown':
+                stats['markdown_count'] += 1
+            elif knowledge.file_type == 'python':
+                stats['python_count'] += 1
+
+            # Collect folders
+            stats['folders'].add(knowledge.folder)
+
+            # Count keywords
+            stats['total_keywords'] += len(knowledge.keywords)
+
+            # Count content length
+            stats['total_content_length'] += len(knowledge.content)
+
+            # Folder statistics
+            folder = knowledge.folder
+            if folder not in stats['folder_stats']:
+                stats['folder_stats'][folder] = {'file_count': 0, 'content_length': 0}
+
+            stats['folder_stats'][folder]['file_count'] += 1
+            stats['folder_stats'][folder]['content_length'] += len(knowledge.content)
+
+        return stats
 
     def load_data(self, file_paths: List[str]):
-        """Tải dữ liệu từ các file markdown"""
+        """Tải dữ liệu từ các file markdown (method cũ, giữ để backward compatibility)"""
         parser = MarkdownParser()
 
         with Progress(
@@ -440,7 +1109,6 @@ class InterviewAgent:
         )
 
         # Shuffle questions for randomness
-        import random
 
         random.shuffle(self.questions)
 
@@ -1131,16 +1799,56 @@ class ChatMode:
 @click.option('--shuffle', '-s', is_flag=True, help='Xáo trộn thứ tự câu hỏi')
 @click.option('--limit', '-l', type=int, help='Giới hạn số lượng câu hỏi')
 @click.option('--verbose', '-v', is_flag=True, help='Hiển thị thông tin chi tiết')
-def main(files, mode, shuffle, limit, verbose):
+@click.option(
+    '--workspace',
+    '-w',
+    type=click.Path(exists=True),
+    help='Đường dẫn workspace để load toàn bộ',
+)
+@click.option(
+    '--folders',
+    '-f',
+    type=str,
+    help='Danh sách folders cách nhau bởi dấu phẩy (vd: getting-started,pipelines)',
+)
+@click.option('--include-python', is_flag=True, help='Bao gồm phân tích file Python')
+@click.option(
+    '--max-file-size',
+    type=int,
+    default=1024 * 1024,
+    help='Kích thước file tối đa (bytes)',
+)
+@click.option(
+    '--exclude-folders',
+    type=str,
+    help='Loại trừ folders (vd: __pycache__,node_modules)',
+)
+def main(
+    files,
+    mode,
+    shuffle,
+    limit,
+    verbose,
+    workspace,
+    folders,
+    include_python,
+    max_file_size,
+    exclude_folders,
+):
     """
     AI Interview Agent - Hugging Face Knowledge Assessment
 
     Phân tích các file .md và tạo phiên phỏng vấn tương tác.
 
     Examples:
+        # Traditional file-based loading
         python main.py getting-started/questions.md getting-started/introduction.md
         python main.py *.md --mode chat
-        python main.py questions.md --mode interview --limit 5
+
+        # New workspace loading
+        python main.py --workspace . --mode chat
+        python main.py --workspace . --folders 'getting-started,pipelines'
+        python main.py --workspace . --include-python --exclude-folders '__pycache__'
     """
 
     # Banner
@@ -1154,31 +1862,96 @@ def main(files, mode, shuffle, limit, verbose):
         )
     )
 
-    if not files:
-        console.print('[red]❌ Cần chỉ định ít nhất một file .md![/red]')
-        console.print('\n[yellow]Ví dụ:[/yellow]')
-        console.print(
-            '  python main.py getting-started/questions.md getting-started/introduction.md'
-        )
-        console.print('  python main.py *.md --mode chat')
-        return
-
     # Khởi tạo agent
     agent = InterviewAgent()
 
-    # Tải dữ liệu
-    console.print(f'\n[bold]📁 Tải dữ liệu từ {len(files)} file(s)...[/bold]')
-    agent.load_data(list(files))
+    # Configure workspace loading if enabled
+    if workspace or folders or include_python:
+        # Configure workspace loader
+        config = WorkspaceConfig()
+        config.enable_code_analysis = include_python
+        config.max_file_size = max_file_size
 
-    if verbose:
-        console.print(
-            f'\n[dim]Loaded {len(agent.questions)} questions and {len(agent.knowledge_base)} documents[/dim]'
+        if exclude_folders:
+            config.exclude_folders = exclude_folders.split(',')
+
+        agent.workspace_loader.config = config
+
+        # Determine workspace path
+        workspace_path = workspace or '.'
+
+        # Parse folders if specified
+        selected_folders = folders.split(',') if folders else None
+
+        # Load workspace content
+        console.print(f'\n[bold]🌐 Loading workspace: {workspace_path}[/bold]')
+        if selected_folders:
+            console.print(
+                f'[yellow]📁 Selected folders: {", ".join(selected_folders)}[/yellow]'
+            )
+
+        knowledge_base = agent.workspace_loader.load_workspace_content(
+            workspace_path, selected_folders or []
         )
 
-    # Áp dụng giới hạn
+        # Set knowledge base and load questions
+        agent.knowledge_base = knowledge_base
+        agent.questions = []
+
+        # Try to load questions from workspace structure
+        workspace_structure = agent.workspace_loader.discover_workspace(workspace_path)
+        parser = MarkdownParser()
+
+        for question_file in workspace_structure['question_files']:
+            questions = parser.parse_questions(question_file)
+            agent.questions.extend(questions)
+
+        console.print(
+            f'[green]✓ Loaded {len(knowledge_base)} documents and {len(agent.questions)} questions[/green]'
+        )
+
+    elif files:
+        # Traditional file-based loading
+        console.print(f'\n[bold]📁 Loading {len(files)} file(s)...[/bold]')
+        agent.load_data(list(files))
+
+        if verbose:
+            console.print(
+                f'\n[dim]Loaded {len(agent.questions)} questions and {len(agent.knowledge_base)} documents[/dim]'
+            )
+
+    else:
+        # Auto-discovery mode
+        console.print('\n[yellow]🔍 Auto-discovery mode[/yellow]')
+        console.print('[dim]Looking for markdown files in current directory...[/dim]')
+
+        workspace_structure = agent.workspace_loader.discover_workspace('.')
+        markdown_files = workspace_structure['markdown_files']
+
+        if markdown_files:
+            console.print(f'[green]Found {len(markdown_files)} markdown files[/green]')
+
+            # Load the discovered files
+            agent.load_data(markdown_files[:10])  # Limit to first 10 files
+            console.print(f'[green]✓ Loaded {len(agent.questions)} questions[/green]')
+        else:
+            console.print('[red]❌ No markdown files found![/red]')
+            console.print('\n[yellow]Examples:[/yellow]')
+            console.print('  python main.py getting-started/questions.md')
+            console.print('  python main.py --workspace . --mode chat')
+            return
+
+    # Apply limit
     if limit and limit < len(agent.questions):
         agent.questions = agent.questions[:limit]
-        console.print(f'[yellow]Giới hạn số câu hỏi: {limit}[/yellow]')
+        console.print(f'[yellow]Question limit applied: {limit}[/yellow]')
+
+    # Apply shuffle
+    if shuffle and agent.questions:
+        import random
+
+        random.shuffle(agent.questions)
+        console.print('[yellow]Questions shuffled[/yellow]')
 
     # Chế độ hoạt động
     if mode == 'interview':
